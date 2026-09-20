@@ -85,6 +85,22 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 - `inspect_model(model_name)` — feature schema and target classes.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
 
+## Example: ask Claude directly
+
+Once a model's trained and the MCP server is attached (see above), just talk to Claude in plain language — no need to know the tool schema:
+
+> "I've got 3 deals to prioritize before quarter close: Northwind Systems ($42k, Opportunity stage, came from a referral, VP contact, owned by Carla Nguyen, 8 touches logged), Summit Retail Group ($8k, still a Lead, paid social source, owned by Brian Kessler), and Anchor Nonprofit ($3k, still a Lead, owned by Frank Suarez, no activity logged yet). Run them through deal_predictor_v1 and tell me which to prioritize."
+
+Claude calls `predict` once per deal and comes back with a ranked, *explained* answer, not just a number:
+
+| Deal | Win Prob | Why |
+|---|---|---|
+| Northwind Systems | 69% | Opportunity stage + referral + VP contact all favor it; $42k deal size is the one drag |
+| Summit Retail Group | 35% | Still Lead stage + paid social source — both large, unopposed drags |
+| Anchor Nonprofit | 34% | Zero logged activity, still a Lead — nothing in the record favors it |
+
+Worth knowing before you ask: any field you don't mention comes through as missing to the model, not as "average" — so naming a rep and a lifecycle stage (using the model's own trained categories, e.g. `Lead` / `Opportunity` / `Customer`) matters far more for a well-differentiated answer than adding extra color to fields the model already has.
+
 ## Data requirements
 
 `glin train` validates your CSV before doing any work — hard problems (e.g. a target column with only one class) stop training with a clear error; soft issues (e.g. a date-like column) print a warning and training proceeds anyway. These rules live in `glin/validation.py` as a flat, appendable list, so support for a currently-unsupported shape below can be added by adding one rule and one preprocessing case, without touching the rest of the pipeline.
