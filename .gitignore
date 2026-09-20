@@ -5,3 +5,10 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+
+# Local Development
+.localdev/
+
+# Generated at Pages build time (see .github/workflows/deploy.yml); the
+# source of truth is the root README.md.
+docs/README.md
