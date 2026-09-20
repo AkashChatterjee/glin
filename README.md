@@ -46,6 +46,11 @@ Models are saved under `~/.glin/models/<name>/`.
 glin list
 ```
 
+```bash
+glin delete churn_v1        # prompts for confirmation
+glin delete churn_v1 --yes  # skips the prompt
+```
+
 ## Use it locally (Claude Desktop, Cursor, ...)
 
 Add to your MCP client's config (e.g. `claude_desktop_config.json`):

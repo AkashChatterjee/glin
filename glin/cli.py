@@ -1,5 +1,7 @@
-"""glin CLI: train, list, serve."""
+"""glin CLI: train, list, delete, serve."""
 from __future__ import annotations
+
+import shutil
 
 import click
 import pandas as pd
@@ -82,6 +84,23 @@ def list_cmd() -> None:
     click.echo(fmt_row(tuple("-" * w for w in widths)))
     for row in rows:
         click.echo(fmt_row(row))
+
+
+@main.command()
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
+def delete(name: str, yes: bool) -> None:
+    """Delete a trained model."""
+    model_dir = DEFAULT_MODELS_ROOT / name
+    if not model_dir.exists():
+        click.echo(f"Error: model '{name}' not found in {DEFAULT_MODELS_ROOT}")
+        raise SystemExit(1)
+
+    if not yes:
+        click.confirm(f"Delete model '{name}' at {model_dir}?", abort=True)
+
+    shutil.rmtree(model_dir)
+    click.echo(f"Deleted model '{name}'")
 
 
 @main.command()
