@@ -16,34 +16,71 @@ def main() -> None:
     """glin: instant, exactly-explainable statistical classifiers for AI agents."""
 
 
+def _print_training_progress(best_log_loss: float, elapsed_seconds: float) -> None:
+    """engine.train_model's on_progress= callback: runs in the main process
+    (from a watcher thread, not a training worker), so plain click.echo is
+    safe here. Overwrites a single line in place rather than printing one
+    line per bag per second -- "best validation log-loss across all bags
+    so far," which is the number that actually matters for judging whether
+    training is still making progress."""
+    msg = f"  best log-loss so far: {best_log_loss:.4f}  ({elapsed_seconds:,.0f}s elapsed)"
+    click.echo(f"\r{msg:<60}", nl=False)
+
+
 @main.command()
 @click.argument("csv_path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--target", required=True, help="Name of the target column to predict.")
 @click.option("--name", required=True, help="Unique name to save this model under.")
-def train(csv_path: str, target: str, name: str) -> None:
+@click.option(
+    "--quiet",
+    is_flag=True,
+    help="Suppress the live boosting-progress lines (stage messages still print).",
+)
+def train(csv_path: str, target: str, name: str, quiet: bool) -> None:
     """Train an EBM classifier on CSV_PATH and save it as --name."""
+    click.echo(f"Loading {csv_path} ...")
     df = pd.read_csv(csv_path)
+    click.echo(f"  {len(df):,} rows, {len(df.columns)} columns")
 
+    click.echo("Validating dataset...")
     validation = validate_dataset(df, target)
-    for issue in validation.warnings:
-        click.echo(f"Warning: {issue.message}")
+    if validation.warnings:
+        click.echo("Warnings:")
+        for issue in validation.warnings:
+            click.echo(f"  - {issue.message}")
+        click.echo()
     if not validation.is_valid:
+        click.echo("Errors:")
         for issue in validation.errors:
-            click.echo(f"Error: {issue.message}")
+            click.echo(f"  - {issue.message}")
         raise SystemExit(1)
 
-    bundle = engine.train_model(df, target, model_name=name)
+    click.echo(
+        f"Training EBM classifier on {len(df):,} rows "
+        "(large datasets can take a few minutes)..."
+    )
+    bundle = engine.train_model(
+        df,
+        target,
+        model_name=name,
+        on_progress=None if quiet else _print_training_progress,
+    )
+    if not quiet:
+        click.echo()  # close out the in-place progress line
+
+    click.echo("Saving model...")
     model_dir = engine.save_bundle(bundle, DEFAULT_MODELS_ROOT)
 
     preprocessor = bundle["preprocessor"]
-    click.echo(f"Trained model '{name}' -> {model_dir}")
-    click.echo(f"  Classes: {bundle['target_classes']}")
+    dropped = ", ".join(preprocessor.dropped_columns_) or "none"
+    click.echo(f"Trained '{name}' -> {model_dir}")
+    click.echo(f"  Classes:          {', '.join(str(c) for c in bundle['target_classes'])}")
     click.echo(
-        f"  Features kept: {len(preprocessor.output_columns_)} "
+        f"  Features kept:    {len(preprocessor.output_columns_)} "
         f"({len(preprocessor.numeric_columns_)} numeric, "
         f"{len(preprocessor.categorical_columns_)} categorical)"
     )
-    click.echo(f"  Features dropped: {preprocessor.dropped_columns_}")
+    click.echo(f"  Features dropped: {dropped}")
 
 
 @main.command(name="list")

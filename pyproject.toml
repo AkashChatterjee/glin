@@ -1,6 +1,6 @@
 [project]
 name = "glin-ml"
-version = "0.1.1"
+version = "0.1.2"
 description = "Instant, exactly-explainable statistical classifiers for AI agents, over MCP."
 readme = "README.md"
 license = { text = "MIT" }

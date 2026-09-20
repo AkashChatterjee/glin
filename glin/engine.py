@@ -14,9 +14,13 @@ contract.
 from __future__ import annotations
 
 import json
+import threading
+import time
+import warnings
 from datetime import datetime, timezone
+from multiprocessing import Manager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 import joblib
 import numpy as np
@@ -57,13 +61,26 @@ def train_model(
     max_bins: int = 256,
     interactions: int = 10,
     random_state: int = 42,
+    on_progress: Optional[Callable[[float, float], None]] = None,
+    progress_interval: float = 1.0,
 ) -> dict[str, Any]:
     """Fits EBMTabularPreprocessor on the feature columns and an
     ExplainableBoostingClassifier on the transformed output. Works for
     binary or multiclass targets (interpret-core automatically strips
     interaction terms for multiclass models). Raises ValueError if the
     dataset fails a hard validation rule (see glin.validation); returns any
-    soft warnings alongside the trained bundle."""
+    soft warnings alongside the trained bundle.
+
+    ``on_progress``, if given, is invoked roughly every ``progress_interval``
+    seconds as ``on_progress(best_log_loss_so_far, elapsed_seconds)``. EBM
+    trains its bagged ensemble across parallel worker processes, each with
+    its own independent memory, so getting one coherent "best across all
+    bags" number requires a ``multiprocessing.Manager`` value the workers
+    all update -- a plain closure variable would only ever see its own
+    process's bag. ``on_progress`` itself always runs back in this process
+    (from a watcher thread), so it's free to print, log, or touch anything
+    that isn't fork-safe.
+    """
     validation = validate_dataset(df, target_column)
     if not validation.is_valid:
         raise ValueError("; ".join(issue.message for issue in validation.errors))
@@ -85,14 +102,57 @@ def train_model(
             "high-cardinality) — nothing left to train on"
         )
 
+    ebm_callback = None
+    manager = None
+    watcher_thread = None
+    stop_watching = None
+
+    if on_progress is not None:
+        manager = Manager()
+        best_so_far = manager.Value("d", float("inf"))
+        lock = manager.Lock()
+
+        def ebm_callback(bag_idx: int, step_idx: int, progress_made: bool, metric: float) -> bool:
+            with lock:
+                if metric < best_so_far.value:
+                    best_so_far.value = metric
+            return False  # never request early termination
+
+        stop_watching = threading.Event()
+        start_time = time.monotonic()
+
+        def _watch() -> None:
+            while not stop_watching.wait(progress_interval):
+                current = best_so_far.value
+                if current != float("inf"):
+                    on_progress(current, time.monotonic() - start_time)
+
+        watcher_thread = threading.Thread(target=_watch, daemon=True)
+        watcher_thread.start()
+
     model = ExplainableBoostingClassifier(
         feature_names=list(X.columns),
         feature_types=preprocessor.get_feature_types(),
         max_bins=max_bins,
         interactions=interactions,
         random_state=random_state,
+        callback=ebm_callback,
     )
-    model.fit(X, y)
+    try:
+        with warnings.catch_warnings():
+            # interpret-core warns that missing values won't render in its own
+            # interactive dashboard, which glin never uses — irrelevant noise
+            # for CLI/MCP callers who only ever see explain_record()'s output.
+            warnings.filterwarnings("ignore", category=UserWarning, module=r"interpret\..*")
+            model.fit(X, y)
+    finally:
+        if watcher_thread is not None:
+            stop_watching.set()
+            watcher_thread.join()
+        if on_progress is not None and best_so_far.value != float("inf"):
+            on_progress(best_so_far.value, time.monotonic() - start_time)
+        if manager is not None:
+            manager.shutdown()
 
     return {
         "model_name": model_name,
@@ -107,6 +167,13 @@ def train_model(
 def save_bundle(bundle: dict[str, Any], models_root: Path) -> Path:
     model_dir = Path(models_root) / bundle["model_name"]
     model_dir.mkdir(parents=True, exist_ok=True)
+
+    # train_model()'s on_progress= wires a closure into the fitted model's
+    # .callback attribute; joblib.dump uses plain pickle (not cloudpickle),
+    # which can't serialize closures. It's a training-time-only hook --
+    # nothing at inference time reads model.callback -- so drop it before
+    # persisting rather than widening the pickler.
+    bundle["model"].callback = None
 
     joblib.dump(
         {
