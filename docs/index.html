@@ -30,11 +30,28 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     color: #656d76;
   }
+  #links {
+    max-width: 780px;
+    width: 100%;
+    margin: 0 auto 1.5rem;
+    display: flex;
+    gap: 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  #links a {
+    color: inherit;
+  }
 </style>
 </head>
 <body>
-  <div id="status">Loading README&hellip;</div>
-  <article id="content" class="markdown-body" hidden></article>
+  <div style="display: flex; flex-direction: column; align-items: center; width: 100%;">
+    <nav id="links">
+      <a href="https://github.com/AkashChatterjee/glin" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://pypi.org/project/glin-ml/" target="_blank" rel="noopener">PyPI</a>
+    </nav>
+    <div id="status">Loading README&hellip;</div>
+    <article id="content" class="markdown-body" hidden></article>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
   <script>
