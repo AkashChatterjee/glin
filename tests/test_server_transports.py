@@ -168,6 +168,47 @@ async def test_train_model_overwrite_retrains_existing_model(models_root):
 
 
 @pytest.mark.asyncio
+async def test_train_model_from_csv_path_avoids_inlining_data(models_root, tmp_path):
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text(_fixture_csv())
+
+    mcp = server.build_server(models_root=models_root)
+    _, result = await mcp.call_tool(
+        "train_model",
+        {
+            "csv_path": str(csv_path),
+            "target_column": "churn",
+            "model_name": "from_path_model",
+        },
+    )
+    assert result["model_name"] == "from_path_model"
+    assert engine.load_metadata(models_root / "from_path_model")["model_name"] == "from_path_model"
+
+
+@pytest.mark.asyncio
+async def test_train_model_requires_exactly_one_of_csv_path_or_csv_content(models_root):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    mcp = server.build_server(models_root=models_root)
+    with pytest.raises(ToolError, match="exactly one"):
+        await mcp.call_tool(
+            "train_model",
+            {"target_column": "churn", "model_name": "neither_given"},
+        )
+
+    with pytest.raises(ToolError, match="exactly one"):
+        await mcp.call_tool(
+            "train_model",
+            {
+                "csv_path": "/does/not/matter.csv",
+                "csv_content": _fixture_csv(),
+                "target_column": "churn",
+                "model_name": "both_given",
+            },
+        )
+
+
+@pytest.mark.asyncio
 async def test_train_model_invalid_dataset_raises(models_root):
     from mcp.server.fastmcp.exceptions import ToolError
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 from mcp.server.fastmcp import FastMCP
@@ -63,19 +63,35 @@ def build_server(
 
     @mcp.tool()
     def train_model(
-        csv_content: str,
         target_column: str,
         model_name: str,
+        csv_path: Optional[str] = None,
+        csv_content: Optional[str] = None,
         overwrite: bool = False,
     ) -> dict[str, Any]:
-        """Train an EBM classifier from raw CSV text and save it as model_name.
-        This is also how to retrain an existing model: pass overwrite=True to
+        """Train an EBM classifier from a CSV and save it as model_name. This
+        is also how to retrain an existing model: pass overwrite=True to
         replace it with a freshly trained model (e.g. on updated data) --
         otherwise a pre-existing model_name is rejected so it isn't silently
         clobbered.
 
-        csv_content must be a complete, well-formed CSV (header row + data
-        rows) -- this tool does no cleanup of its own beyond what
+        Pass exactly one of:
+        - csv_path: a path this server process can read (it does the
+          reading itself). Always prefer this when the MCP client runs on
+          the same machine as the server, e.g. the local stdio transport
+          (Claude Desktop, Cursor) -- it works for CSVs of any size without
+          the calling agent ever having to read or reproduce the file's
+          contents itself.
+        - csv_content: the complete raw CSV text (header row + data rows).
+          Only use this when there's no path the server can reach, e.g. a
+          remote streamable-http deployment with no shared filesystem, or
+          data assembled in memory. Do not use this for large files --
+          having an agent inline tens of thousands of rows as a tool-call
+          argument is slow, burns enormous context, and risks truncation.
+          Prefer writing the data to a file the server can see (csv_path)
+          whenever that's possible instead.
+
+        Either way, this tool does no cleanup of its own beyond what
         EBMTabularPreprocessor already does automatically (coercing dirty
         numeric formatting, dropping ID-like/constant/high-cardinality
         columns, imputing missing values). If the CSV came from an
@@ -84,6 +100,9 @@ def build_server(
         target, etc.), fetch the `prepare_csv_for_training` prompt first --
         those are judgment calls this tool does not make for you.
         """
+        if (csv_path is None) == (csv_content is None):
+            raise ValueError("pass exactly one of csv_path or csv_content")
+
         model_dir = models_root / model_name
         if model_dir.exists() and not overwrite:
             raise ValueError(
@@ -91,7 +110,11 @@ def build_server(
                 "overwrite=True to retrain it with this data"
             )
 
-        df = pd.read_csv(io.StringIO(csv_content))
+        df = (
+            pd.read_csv(csv_path)
+            if csv_path is not None
+            else pd.read_csv(io.StringIO(csv_content))
+        )
         bundle = engine.train_model(df, target_column, model_name=model_name)
         engine.save_bundle(bundle, models_root)
 
@@ -122,19 +145,31 @@ happily train a bad model on data it wasn't designed to catch.
 
 {target_line}
 
-1. Parse the raw file correctly first.
+1. Decide how you'll hand the CSV to train_model.
+   - If you can reach the file on disk from wherever this MCP server runs
+     (true for the common local stdio setup, e.g. Claude Desktop or
+     Cursor talking to a glin server on the same machine), pass
+     csv_path and let the server read the file itself.
+   - Only pass csv_content (the raw CSV text inline) when there's truly no
+     shared filesystem, e.g. a remote streamable-http deployment. Never
+     inline a large file this way -- reproducing tens of thousands of rows
+     as a tool-call argument is slow, burns enormous context, and risks
+     truncation. If you had to clean the data in memory, write the
+     cleaned result to a file and pass csv_path instead of inlining it.
+
+2. Parse the raw file correctly first.
    - Open the file as text and look at the first ~20 lines before assuming
      it's a clean, comma-delimited, one-header-row CSV. Exports from
      spreadsheet tools often prepend banner/title rows, blank rows, or a
      second header row -- skip those before the real header.
    - Confirm the delimiter is actually a comma (not ';', tab, or '|'). If
-     not, convert it before building csv_content -- train_model always
+     not, convert it before handing the CSV off -- train_model always
      parses with pandas' default comma-delimited reader.
    - Watch for ragged rows (inconsistent column counts) and stray quoting
      -- these usually mean upstream data corruption, not something glin's
      preprocessor should paper over silently.
 
-2. Pick the target column deliberately.
+3. Pick the target column deliberately.
    - It must exist verbatim in the header (exact spelling/case/whitespace).
    - It needs at least 2 distinct non-null values, and the dataset needs
      at least {MIN_ROWS} rows total, or train_model will reject it.
@@ -144,7 +179,7 @@ happily train a bad model on data it wasn't designed to catch.
      (e.g. quantiles or domain thresholds) before training, or pick a
      different target.
 
-3. Know what glin's preprocessor already handles for you (don't pre-clean
+4. Know what glin's preprocessor already handles for you (don't pre-clean
    these -- it's wasted work and can conflict with its own logic):
    - Dirty-but-numeric columns (currency symbols, commas, stray
      whitespace) are coerced to numeric automatically as long as
@@ -158,7 +193,7 @@ happily train a bad model on data it wasn't designed to catch.
    - High-cardinality categoricals (>{defaults.max_categorical_cardinality}
      distinct values) are dropped automatically.
 
-4. Fix what glin's preprocessor does NOT handle -- these need your
+5. Fix what glin's preprocessor does NOT handle -- these need your
    judgment before the CSV goes into train_model:
    - Date/datetime-looking columns are never parsed into features; they
      fall through to being treated as opaque categorical text (and are
@@ -174,7 +209,7 @@ happily train a bad model on data it wasn't designed to catch.
      target), and obviously irrelevant free-text columns are not
      detected -- drop them yourself.
 
-5. Sanity-check before and after training.
+6. Sanity-check before and after training.
    - Call `list_models` first to make sure you're not about to silently
      clobber an unrelated model with the same name; only pass
      `overwrite=True` on `train_model` when you actually intend to retrain
@@ -184,9 +219,9 @@ happily train a bad model on data it wasn't designed to catch.
      you can catch a mistake (like an important column being dropped as
      "ID-like") before trusting the model.
 
-Once the CSV is clean, call `train_model` with the full CSV text (header +
-rows) as `csv_content`, the exact target column name, and a `model_name` to
-save it under."""
+Once the CSV is clean, call `train_model` with csv_path (preferred) or
+csv_content, the exact target column name, and a `model_name` to save it
+under."""
 
     return mcp
 

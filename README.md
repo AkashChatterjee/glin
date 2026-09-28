@@ -84,7 +84,7 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 - `list_models()` — all trained models available.
 - `inspect_model(model_name)` — feature schema and target classes.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
-- `train_model(csv_content, target_column, model_name, overwrite=False)` — train a new model straight from raw CSV text, no filesystem access required on the client side. Pass `overwrite=True` to retrain an existing model under the same name (e.g. on refreshed data); otherwise a name collision is rejected so nothing gets silently clobbered.
+- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a path the server process can read — always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive).
 
 ## Prompts exposed over MCP
 
