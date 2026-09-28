@@ -41,7 +41,12 @@ def models_root(tmp_path):
 async def test_all_tools_registered(models_root):
     mcp = server.build_server(models_root=models_root)
     tools = await mcp.list_tools()
-    assert {t.name for t in tools} == {"list_models", "inspect_model", "predict"}
+    assert {t.name for t in tools} == {
+        "list_models",
+        "inspect_model",
+        "predict",
+        "train_model",
+    }
 
 
 @pytest.mark.asyncio
@@ -99,6 +104,98 @@ async def test_predict_top_n_truncates_contributions(models_root):
     assert len(result["contributions"]) == 1
 
 
+def _fixture_csv(n=200, seed=0) -> str:
+    rng = np.random.RandomState(seed)
+    df = pd.DataFrame(
+        {
+            "age": rng.randint(18, 80, size=n).astype(float),
+            "plan": rng.choice(["basic", "premium"], size=n),
+        }
+    )
+    df["churn"] = np.where(df["age"] < 40, "Yes", "No")
+    return df.to_csv(index=False)
+
+
+@pytest.mark.asyncio
+async def test_train_model_trains_and_saves_a_new_model(models_root):
+    mcp = server.build_server(models_root=models_root)
+    _, result = await mcp.call_tool(
+        "train_model",
+        {
+            "csv_content": _fixture_csv(),
+            "target_column": "churn",
+            "model_name": "brand_new_model",
+        },
+    )
+    assert result["model_name"] == "brand_new_model"
+    assert sorted(result["target_classes"]) == ["No", "Yes"]
+    assert "age" in result["features_kept"]
+    assert "plan" in result["features_kept"]
+
+    metadata = engine.load_metadata(models_root / "brand_new_model")
+    assert metadata["model_name"] == "brand_new_model"
+
+
+@pytest.mark.asyncio
+async def test_train_model_refuses_to_clobber_existing_model_without_overwrite(models_root):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    mcp = server.build_server(models_root=models_root)
+    with pytest.raises(ToolError, match="overwrite=True"):
+        await mcp.call_tool(
+            "train_model",
+            {
+                "csv_content": _fixture_csv(),
+                "target_column": "churn",
+                "model_name": "server_test_model",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_train_model_overwrite_retrains_existing_model(models_root):
+    mcp = server.build_server(models_root=models_root)
+    _, result = await mcp.call_tool(
+        "train_model",
+        {
+            "csv_content": _fixture_csv(seed=1),
+            "target_column": "churn",
+            "model_name": "server_test_model",
+            "overwrite": True,
+        },
+    )
+    assert result["model_name"] == "server_test_model"
+
+
+@pytest.mark.asyncio
+async def test_train_model_invalid_dataset_raises(models_root):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    mcp = server.build_server(models_root=models_root)
+    tiny_csv = "age,churn\n25,Yes\n30,No\n"
+    with pytest.raises(ToolError, match="at least"):
+        await mcp.call_tool(
+            "train_model",
+            {
+                "csv_content": tiny_csv,
+                "target_column": "churn",
+                "model_name": "too_small",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_prepare_csv_for_training_prompt_mentions_target_column(models_root):
+    mcp = server.build_server(models_root=models_root)
+    prompts = await mcp.list_prompts()
+    assert "prepare_csv_for_training" in {p.name for p in prompts}
+
+    result = await mcp.get_prompt("prepare_csv_for_training", {"target_column": "churn"})
+    text = result.messages[0].content.text
+    assert "churn" in text
+    assert "train_model" in text
+
+
 @pytest.mark.asyncio
 async def test_streamable_http_real_mcp_client_round_trip(models_root):
     """End-to-end proof that a genuine MCP client (not a bespoke protocol)
@@ -129,6 +226,7 @@ async def test_streamable_http_real_mcp_client_round_trip(models_root):
                     "list_models",
                     "inspect_model",
                     "predict",
+                    "train_model",
                 }
 
                 result = await session.call_tool(
