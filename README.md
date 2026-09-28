@@ -84,6 +84,11 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 - `list_models()` — all trained models available.
 - `inspect_model(model_name)` — feature schema and target classes.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
+- `train_model(csv_content, target_column, model_name, overwrite=False)` — train a new model straight from raw CSV text, no filesystem access required on the client side. Pass `overwrite=True` to retrain an existing model under the same name (e.g. on refreshed data); otherwise a name collision is rejected so nothing gets silently clobbered.
+
+## Prompts exposed over MCP
+
+- `prepare_csv_for_training(target_column="")` — a checklist an agent should work through before calling `train_model`: parsing gotchas (banner rows, wrong delimiter, ragged rows), how to pick a valid target column, what `glin`'s preprocessor already handles automatically (dirty numeric formatting, missing values, ID-like/constant/high-cardinality columns), and what it doesn't (dates, embedded JSON/list cells, leakage columns, continuous-looking targets) — all pulled live from the preprocessor's actual defaults, so the guidance can't drift out of sync with the code.
 
 ## Example: ask Claude directly
 
