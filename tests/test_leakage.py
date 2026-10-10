@@ -5,6 +5,7 @@ import pytest
 from glin import engine, server
 from glin.leakage import find_leaky_features, leakage_warnings
 from glin.preprocessor import EBMTabularPreprocessor
+from tests.mcp_compat import call_structured
 
 
 def _suspects(df, target):
@@ -234,7 +235,8 @@ def test_train_model_clean_data_has_no_leakage_warning():
 @pytest.mark.asyncio
 async def test_mcp_train_model_returns_leakage_warning_and_trains(tmp_path):
     mcp = server.build_server(models_root=tmp_path)
-    _, result = await mcp.call_tool(
+    result = await call_structured(
+        mcp,
         "train_model",
         {
             "csv_content": _leaky_df().to_csv(index=False),
