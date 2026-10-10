@@ -56,7 +56,10 @@ def build_server(
         """Predicted class and probabilities, plus the full glassbox audit:
         baseline rate, every contributing feature's exact score (sorted by
         magnitude), and an additivity check verifying the scores sum to the
-        model's own predicted probability."""
+        model's own predicted probability. `warnings` names inputs the model never
+        saw (unseen categories, numerics outside the training range); treat the
+        prediction as less reliable when present. `missing_features` lists
+        absent inputs, which are valid but worth mentioning."""
         bundle = engine.load_bundle(_model_dir(model_name))
         return engine.explain_record(bundle, features, top_n=top_n)
 
