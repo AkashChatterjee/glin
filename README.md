@@ -143,7 +143,9 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 
 - At least 2 distinct non-null values (binary or multiclass) — a single-class target is a hard error.
 - Rows with a missing target value are dropped automatically (with a warning); the rest are unaffected.
-- A numeric target with many distinct values (>20) triggers a warning that it looks like a regression target — `glin` trains classifiers, not regressors.
+- A numeric target with many distinct values (>20) triggers a warning that it looks like a regression target — `glin` trains classifiers, not regressors, so each value would be its own unrelated class. Band it into a few classes (quantiles or domain thresholds) or pick another target.
+- A numeric target with 3–20 distinct values (e.g. a score or ordinal level) triggers a warning that the multiclass model ignores the values' order; consider fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts carry the same guidance.
+- Full regression (upstream `ExplainableBoostingRegressor`) is planned separately and not yet supported.
 
 ## Releasing (maintainers)
 
