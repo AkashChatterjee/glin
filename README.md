@@ -81,9 +81,11 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 
 ## Tools exposed over MCP
 
+Every tool carries MCP annotations (title, `readOnlyHint`, `destructiveHint`): all are read-only except `train_model`, which is flagged destructive since `overwrite=True` replaces an existing model — so clients can auto-approve the former and confirm the latter.
+
 - `list_models()` — all trained models available.
 - `inspect_model(model_name)` — feature schema and target classes.
-- `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
+- `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability. Also returns `warnings` for inputs the model never saw (each with `feature`, `value`, `issue` of `unseen_category` or `out_of_range`, and the `training_range` for numerics) and `missing_features` for absent/blank inputs, which are valid but reported separately.
 - `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a `.csv` file the server may read — see [Restricting `csv_path`](#restricting-csv_path); always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). Returns the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below).
 - `explain_model(model_name, top_n=15, include_shapes=True)` — what the model learned, globally and exactly (read off the additive structure, not sampled from example predictions): every feature ranked by mean absolute log-odds contribution with its main-effect vs interaction split, the top terms including pairwise interactions with their share of the total, and for binary targets a per-feature shape (which categories or value ranges push toward which class).
 - `list_hyperparameters()` — every tunable EBM hyperparameter with its type, default, allowed range, and a note on what raising or lowering it does.
@@ -137,6 +139,7 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 | Numeric (int/float), including `NaN` | Passed through as-is; EBM natively bins missing values into their own split. |
 | Dirty numeric strings (blanks, e.g. `" "` for a new customer's total charges) | Coerced to `float64` if ≥80% of non-null values parse as numbers; unparseable cells become `NaN`. |
 | Categorical strings, any cardinality up to 250 unique values | Standardized (lowercased, stripped) and one-hot-style binned by EBM; missing/unseen values map to a `__missing__` sentinel. |
+| Currency / thousands-separated strings (`$1,234.56`, `£1,234`, `€1.234,56`, `(1,234)`) | Currency symbols and whitespace are stripped, then the column is coerced as above. A decimal comma is used only when the column has unambiguous European values (`1.234,56`, `12,5`, `1.234.567`); a bare `1,234` is read as a thousands group. Columns mixing both conventions are parsed as US and a warning is returned. |
 | Boolean columns | Treated as a 0/1 continuous numeric feature. |
 
 **Feature columns — not yet supported** (each is flagged by `glin train`'s validator when detected):
@@ -145,7 +148,6 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 |---|---|---|
 | Dates / timestamps | No date features are extracted. The column is either dropped (if high-cardinality) or kept as a meaningless categorical label — no time-based signal survives either way. | Cut from V1 scope; a real dataset need should drive adding cyclical date-feature extraction. |
 | Free text / natural language | Dropped once it exceeds 250 unique values; below that threshold it becomes a set of (almost certainly useless) categorical labels. | glin doesn't do NLP; a text column isn't a set of classes. |
-| Currency symbols / thousands separators (`$`, `€`, `£`, `,`) | Not stripped. `"$1,234.56"` fails the ≥80% numeric-parse threshold and falls back to categorical (i.e. garbage). Clean these before training. | Cut from V1 scope under an "assume a healthy dataset" simplification. |
 | Lists / dicts / nested JSON in a cell | Not parsed structurally; treated as an opaque string. | No structured extraction implemented. |
 | Row identifiers (sequential IDs, UUIDs, hashes) | Dropped intentionally — not a gap, this is by design. | IDs carry no predictive signal. |
 
@@ -153,7 +155,9 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 
 - At least 2 distinct non-null values (binary or multiclass) — a single-class target is a hard error.
 - Rows with a missing target value are dropped automatically (with a warning); the rest are unaffected.
-- A numeric target with many distinct values (>20) triggers a warning that it looks like a regression target — `glin` trains classifiers, not regressors.
+- A numeric target with many distinct values (>20) triggers a warning that it looks like a regression target — `glin` trains classifiers, not regressors, so each value would be its own unrelated class. Band it into a few classes (quantiles or domain thresholds) or pick another target.
+- A numeric target with 3–20 distinct values (e.g. a score or ordinal level) triggers a warning that the multiclass model ignores the values' order; consider fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts carry the same guidance.
+- Full regression (upstream `ExplainableBoostingRegressor`) is planned separately and not yet supported.
 
 ## Releasing (maintainers)
 

@@ -184,3 +184,42 @@ def test_missing_target_column_style_usage_preserves_native_nan():
     pre = _fit(df)
     out = pre.transform(df)
     assert out["age"].isna().sum() == df["age"].isna().sum()
+
+
+def _col(values, n=60):
+    return pd.DataFrame({"x": (values * n)[:n], "y": range(n)})
+
+
+@pytest.mark.parametrize(
+    "values,expected",
+    [
+        (["$1,234.56", "$10.00", "$2,000"], [1234.56, 10.0, 2000.0]),
+        (["£1,234", "£99", "£1,000,000"], [1234.0, 99.0, 1000000.0]),
+        (["€1.234,56", "€10,50", "€2.000,00"], [1234.56, 10.5, 2000.0]),
+        (["(1,234.50)", "$5", "$6"], [-1234.5, 5.0, 6.0]),
+    ],
+)
+def test_currency_and_separator_formats_become_numeric(values, expected):
+    pre = _fit(_col(values))
+    assert "x" in pre.numeric_columns_
+    out = pre.transform(_col(values))["x"].tolist()[: len(values)]
+    assert out == pytest.approx(expected)
+    assert pre.warnings_ == []
+
+
+def test_european_decimal_comma_detected_per_column():
+    pre = _fit(_col(["12,5", "3,25", "100"]))
+    assert pre.decimal_comma_columns_ == ["x"]
+    assert pre.transform({"x": "12,5"})["x"].iloc[0] == pytest.approx(12.5)
+
+
+def test_ambiguous_single_group_is_treated_as_thousands():
+    pre = _fit(_col(["1,234", "2,500", "3,999"]))
+    assert pre.decimal_comma_columns_ == []
+    assert pre.transform({"x": "1,234"})["x"].iloc[0] == 1234.0
+
+
+def test_mixed_conventions_warn_and_fall_back_to_us():
+    pre = _fit(_col(["1,234.56", "1.234,56", "5", "6", "7"]))
+    assert pre.decimal_comma_columns_ == []
+    assert any("mixes" in w for w in pre.warnings_)

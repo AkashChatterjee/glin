@@ -86,16 +86,35 @@ def _rule_target_missing_values(df: pd.DataFrame, target_column: str) -> Optiona
     return None
 
 
+_BAND_ADVICE = (
+    "Workarounds: band the target into a few meaningful classes (quantiles or "
+    "domain thresholds) and train on the band, or pick a different target. "
+    "Full regression is planned separately."
+)
+
+
 def _rule_target_looks_continuous(df: pd.DataFrame, target_column: str) -> Optional[Issue]:
     if target_column not in df.columns:
         return None
     series = df[target_column].dropna()
-    if pd.api.types.is_numeric_dtype(series) and series.nunique() > MAX_REASONABLE_TARGET_CLASSES:
+    if pd.api.types.is_bool_dtype(series) or not pd.api.types.is_numeric_dtype(series):
+        return None
+    n_unique = series.nunique()
+    if n_unique > MAX_REASONABLE_TARGET_CLASSES:
         return Issue(
             "warning",
-            f"target column '{target_column}' has {series.nunique()} distinct numeric "
-            "values — glin trains classifiers, not regressors; this looks like a "
-            "continuous quantity rather than a set of classes",
+            f"target column '{target_column}' has {n_unique} distinct numeric "
+            "values — glin trains classifiers, not regressors, so each value would "
+            f"be treated as its own unrelated class. {_BAND_ADVICE}",
+        )
+    if n_unique >= 3:
+        return Issue(
+            "warning",
+            f"target column '{target_column}' is numeric with {n_unique} distinct "
+            "values — glin will train a multiclass classifier that ignores their "
+            "order (predicting 4 when the truth is 5 is as wrong as predicting 1). "
+            "If the values are ordered levels or a score, consider banding them "
+            f"into fewer classes or a binary threshold (e.g. high vs low). {_BAND_ADVICE}",
         )
     return None
 

@@ -257,7 +257,8 @@ def train_model(
         "evaluation": evaluation,
         "training_rows": len(y),
         "training_seconds": training_seconds,
-        "warnings": [issue.message for issue in validation.warnings],
+        "warnings": [issue.message for issue in validation.warnings]
+        + preprocessor.warnings_,
     }
 
 
@@ -395,6 +396,7 @@ def explain_record(
             "reconstructed_probability": reconstructed,
             "model_probability": model_probability,
             "additivity_verified": bool(abs(reconstructed - model_probability) < 1e-3),
+            **preprocessor.check_inputs(features),
         }
 
     # Multiclass: each term's score is an (n_classes,)-shaped vector; the
@@ -423,6 +425,7 @@ def explain_record(
         "reconstructed_probability": reconstructed,
         "model_probability": model_probability,
         "additivity_verified": bool(np.all(np.abs(reconstructed_vec - proba) < 1e-3)),
+        **preprocessor.check_inputs(features),
     }
 
 

@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 import pandas as pd
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from glin import engine, prompts
 from glin.engine import DEFAULT_MODELS_ROOT
@@ -45,6 +46,21 @@ def resolve_csv_path(csv_path: str, allowed_dirs: list[Path]) -> Path:
     return resolved
 
 
+def _read_only(title: str) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title, readOnlyHint=True, destructiveHint=False, openWorldHint=False
+    )
+
+
+_TRAIN_ANNOTATIONS = ToolAnnotations(
+    title="Train Model",
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+
+
 def build_server(
     host: str = "0.0.0.0",
     port: int = 8000,
@@ -60,7 +76,7 @@ def build_server(
             raise ValueError(f"model '{model_name}' not found in {models_root}")
         return model_dir
 
-    @mcp.tool()
+    @mcp.tool(annotations=_read_only("List Models"))
     def list_models() -> list[dict[str, Any]]:
         """List all trained glin models available on this machine."""
         if not models_root.exists():
@@ -71,23 +87,26 @@ def build_server(
             if (model_dir / engine.METADATA_FILENAME).exists()
         ]
 
-    @mcp.tool()
+    @mcp.tool(annotations=_read_only("Inspect Model"))
     def inspect_model(model_name: str) -> dict[str, Any]:
         """Return feature names, types, and target classes for a trained model."""
         return engine.load_metadata(_model_dir(model_name))
 
-    @mcp.tool()
+    @mcp.tool(annotations=_read_only("Predict"))
     def predict(
         model_name: str, features: dict[str, Any], top_n: int = 10
     ) -> dict[str, Any]:
         """Predicted class and probabilities, plus the full glassbox audit:
         baseline rate, every contributing feature's exact score (sorted by
         magnitude), and an additivity check verifying the scores sum to the
-        model's own predicted probability."""
+        model's own predicted probability. `warnings` names inputs the model never
+        saw (unseen categories, numerics outside the training range); treat the
+        prediction as less reliable when present. `missing_features` lists
+        absent inputs, which are valid but worth mentioning."""
         bundle = engine.load_bundle(_model_dir(model_name))
         return engine.explain_record(bundle, features, top_n=top_n)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_read_only("Explain Model"))
     def explain_model(
         model_name: str, top_n: int = 15, include_shapes: bool = True
     ) -> dict[str, Any]:
@@ -102,7 +121,7 @@ def build_server(
         bundle = engine.load_bundle(_model_dir(model_name))
         return engine.global_importance(bundle, top_n=top_n, include_shapes=include_shapes)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_read_only("List Hyperparameters"))
     def list_hyperparameters() -> list[dict[str, Any]]:
         """Every EBM training hyperparameter `train_model` accepts in its
         `hyperparameters` argument: name, type, default, allowed range, and
@@ -110,7 +129,7 @@ def build_server(
         prompt for a search strategy built on these."""
         return [hp.describe() for hp in HYPERPARAMETERS.values()]
 
-    @mcp.tool()
+    @mcp.tool(annotations=_TRAIN_ANNOTATIONS)
     def train_model(
         target_column: str,
         model_name: str,
