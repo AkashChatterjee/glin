@@ -1,20 +1,12 @@
-import asyncio
-import socket
+import sys
 
 import numpy as np
 import pandas as pd
 import pytest
-import uvicorn
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 from glin import engine, server
-
-
-def _unused_tcp_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _train_fixture_model(models_root, model_name="server_test_model"):
@@ -364,48 +356,35 @@ async def test_explain_model_tool_returns_global_importance(models_root):
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_real_mcp_client_round_trip(models_root):
-    """End-to-end proof that a genuine MCP client (not a bespoke protocol)
-    can connect over the network and call glin's tools — the actual
-    requirement behind the EC2 one-shot-deploy story."""
-    port = _unused_tcp_port()
-    mcp = server.build_server(host="127.0.0.1", port=port, models_root=models_root)
-    app = mcp.streamable_http_app()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    uv_server = uvicorn.Server(config)
-    serve_task = asyncio.create_task(uv_server.serve())
+async def test_stdio_real_mcp_client_round_trip(models_root):
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-c",
+            "import sys; from pathlib import Path; from glin import server; "
+            "server.run_stdio(Path(sys.argv[1]))",
+            str(models_root),
+        ],
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
 
-    try:
-        for _ in range(100):
-            if uv_server.started:
-                break
-            await asyncio.sleep(0.05)
-        else:
-            pytest.fail("uvicorn server did not start in time")
+            tools = await session.list_tools()
+            assert {t.name for t in tools.tools} == {
+                "list_models",
+                "inspect_model",
+                "predict",
+                "train_model",
+                "list_hyperparameters",
+                "explain_model",
+            }
 
-        url = f"http://127.0.0.1:{port}/mcp"
-        async with streamable_http_client(url) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-
-                tools = await session.list_tools()
-                assert {t.name for t in tools.tools} == {
-                    "list_models",
-                    "inspect_model",
-                    "predict",
-                    "train_model",
-                    "list_hyperparameters",
-                    "explain_model",
-                }
-
-                result = await session.call_tool(
-                    "predict",
-                    {
-                        "model_name": "server_test_model",
-                        "features": {"age": 25.0, "plan": "basic"},
-                    },
-                )
-                assert result.structuredContent["predicted_class"] in ("Yes", "No")
-    finally:
-        uv_server.should_exit = True
-        await serve_task
+            result = await session.call_tool(
+                "predict",
+                {
+                    "model_name": "server_test_model",
+                    "features": {"age": 25.0, "plan": "basic"},
+                },
+            )
+            assert result.structuredContent["predicted_class"] in ("Yes", "No")

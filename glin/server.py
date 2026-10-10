@@ -1,11 +1,4 @@
-"""Dual-transport MCP server.
-
-Both transports share one set of tool definitions — ``stdio`` for local
-clients (Claude Desktop, Cursor) and ``streamable-http`` (MCP's own standard
-remote transport, no custom wire protocol) for agents calling a deployed
-instance, e.g. on an EC2 box. ``stateless_http=True`` avoids sticky sessions
-so the http mode sits behind a plain load balancer without special handling.
-"""
+"""Local stdio MCP server exposing glin's tools and prompts."""
 from __future__ import annotations
 
 import io
@@ -20,12 +13,8 @@ from glin.engine import DEFAULT_MODELS_ROOT
 from glin.hyperparameters import HYPERPARAMETERS
 
 
-def build_server(
-    host: str = "0.0.0.0",
-    port: int = 8000,
-    models_root: Path = DEFAULT_MODELS_ROOT,
-) -> FastMCP:
-    mcp = FastMCP("glin", host=host, port=port, stateless_http=True)
+def build_server(models_root: Path = DEFAULT_MODELS_ROOT) -> FastMCP:
+    mcp = FastMCP("glin")
 
     def _model_dir(model_name: str) -> Path:
         model_dir = models_root / model_name
@@ -100,16 +89,13 @@ def build_server(
         clobbered.
 
         Pass exactly one of:
-        - csv_path: a path this server process can read (it does the
-          reading itself). Always prefer this when the MCP client runs on
-          the same machine as the server, e.g. the local stdio transport
-          (Claude Desktop, Cursor) -- it works for CSVs of any size without
-          the calling agent ever having to read or reproduce the file's
-          contents itself.
+        - csv_path: a path on this machine (the server process does the
+          reading itself). Always prefer this -- it works for CSVs of any
+          size without the calling agent ever having to read or reproduce
+          the file's contents itself.
         - csv_content: the complete raw CSV text (header row + data rows).
-          Only use this when there's no path the server can reach, e.g. a
-          remote streamable-http deployment with no shared filesystem, or
-          data assembled in memory. Do not use this for large files --
+          Only use this when there's no file on disk to point at, e.g.
+          data pasted into the chat or assembled in memory. Do not use this for large files --
           having an agent inline tens of thousands of rows as a tool-call
           argument is slow, burns enormous context, and risks truncation.
           Prefer writing the data to a file the server can see (csv_path)
@@ -208,10 +194,3 @@ def build_server(
 def run_stdio(models_root: Path = DEFAULT_MODELS_ROOT) -> None:
     build_server(models_root=models_root).run(transport="stdio")
 
-
-def run_http(
-    host: str = "0.0.0.0",
-    port: int = 8000,
-    models_root: Path = DEFAULT_MODELS_ROOT,
-) -> None:
-    build_server(host=host, port=port, models_root=models_root).run(transport="streamable-http")

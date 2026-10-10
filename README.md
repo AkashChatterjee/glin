@@ -2,7 +2,9 @@
 
 CLI tool and Python library that equips AI agents with an instant, statistical "gut feeling" (System 1 thinking).
 
-`glin` trains an [Explainable Boosting Machine](https://interpret.ml/) on a CSV, then exposes it to LLM agents over [MCP](https://modelcontextprotocol.io/) — locally over stdio, or remotely over MCP's standard `streamable-http` transport. Every prediction comes with an exact, zero-approximation breakdown of which features drove it, straight from the model's own additive structure (no SHAP/LIME approximation).
+`glin` trains an [Explainable Boosting Machine](https://interpret.ml/) on a CSV, then exposes it to LLM agents over [MCP](https://modelcontextprotocol.io/) — locally over stdio. Every prediction comes with an exact, zero-approximation breakdown of which features drove it, straight from the model's own additive structure (no SHAP/LIME approximation).
+
+> glin is local-only (stdio); there is no remote/HTTP mode. v0.1.3 is the last release that had one.
 
 ## Install
 
@@ -60,23 +62,10 @@ Add to your MCP client's config (e.g. `claude_desktop_config.json`):
   "mcpServers": {
     "glin": {
       "command": "glin",
-      "args": ["serve", "--mode", "stdio"]
+      "args": ["serve"]
     }
   }
 }
-```
-
-## Deploy it remotely (e.g. one EC2 box, any MCP-aware agent)
-
-```bash
-docker build -t glin .
-docker run -p 8000:8000 -v ~/.glin:/root/.glin glin
-```
-
-Then point any MCP client at the standard streamable-http endpoint:
-
-```bash
-claude mcp add --transport http glin http://<host>:8000/mcp
 ```
 
 ## Tools exposed over MCP
@@ -84,7 +73,7 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 - `list_models()` — all trained models available.
 - `inspect_model(model_name)` — feature schema and target classes.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
-- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a path the server process can read — always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). Returns the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below).
+- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a path on your machine — always prefer this, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only when there's no file to point at, e.g. data pasted into the chat, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). Returns the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below).
 - `explain_model(model_name, top_n=15, include_shapes=True)` — what the model learned, globally and exactly (read off the additive structure, not sampled from example predictions): every feature ranked by mean absolute log-odds contribution with its main-effect vs interaction split, the top terms including pairwise interactions with their share of the total, and for binary targets a per-feature shape (which categories or value ranges push toward which class).
 - `list_hyperparameters()` — every tunable EBM hyperparameter with its type, default, allowed range, and a note on what raising or lowering it does.
 
@@ -154,7 +143,7 @@ git tag v0.1.3
 git push origin v0.1.3
 ```
 
-The workflow runs the tests on Python 3.10 and 3.12, builds the sdist and wheel, checks that the artifacts carry the tag's version, and publishes them to PyPI as `glin-ml` at that exact version. The package version is derived from the git tag by `hatch-vcs` (`pyproject.toml` has no hardcoded version), so there is nothing to bump or commit before a release. Untagged local builds get a dev version such as `0.1.4.dev1+g3fa91a0`, and a source tree with no git metadata (like the Docker build) reports `0.0.0`. `glin.__version__` reads the installed package metadata. Tags that don't match `vX.Y.Z` are ignored. PyPI rejects re-uploading a version number, so a bad release can only be fixed by tagging a new version.
+The workflow runs the tests on Python 3.10 and 3.12, builds the sdist and wheel, checks that the artifacts carry the tag's version, and publishes them to PyPI as `glin-ml` at that exact version. The package version is derived from the git tag by `hatch-vcs` (`pyproject.toml` has no hardcoded version), so there is nothing to bump or commit before a release. Untagged local builds get a dev version such as `0.1.4.dev1+g3fa91a0`, and a source tree with no git metadata reports `0.0.0`. `glin.__version__` reads the installed package metadata. Tags that don't match `vX.Y.Z` are ignored. PyPI rejects re-uploading a version number, so a bad release can only be fixed by tagging a new version.
 
 ### One-time setup that makes this the only path
 

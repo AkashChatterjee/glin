@@ -141,15 +141,9 @@ def delete(name: str, yes: bool) -> None:
 
 
 @main.command()
-@click.option("--mode", type=click.Choice(["stdio", "http"]), default="stdio")
-@click.option("--host", default="0.0.0.0")
-@click.option("--port", default=8000, type=int)
-def serve(mode: str, host: str, port: int) -> None:
-    """Run the glin MCP server (stdio for local clients, http for remote agents)."""
-    if mode == "stdio":
-        server.run_stdio()
-    else:
-        server.run_http(host=host, port=port)
+def serve() -> None:
+    """Run the glin MCP server over stdio, for local MCP clients."""
+    server.run_stdio()
 
 
 if __name__ == "__main__":

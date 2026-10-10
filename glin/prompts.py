@@ -25,12 +25,10 @@ def prep_checklist(target_column: str = "") -> str:
     return f"""{target_line}
 
 1. Decide how you'll hand the CSV to train_model.
-   - If you can reach the file on disk from wherever this MCP server runs
-     (true for the common local stdio setup, e.g. Claude Desktop or
-     Cursor talking to a glin server on the same machine), pass
-     csv_path and let the server read the file itself.
-   - Only pass csv_content (the raw CSV text inline) when there's truly no
-     shared filesystem, e.g. a remote streamable-http deployment. Never
+   - If the file is on disk, pass csv_path and let the server read the
+     file itself (the server runs locally, on the same machine).
+   - Only pass csv_content (the raw CSV text inline) when there's no file
+     to point at, e.g. data pasted into the chat. Never
      inline a large file this way -- reproducing tens of thousands of rows
      as a tool-call argument is slow, burns enormous context, and risks
      truncation. If you had to clean the data in memory, write the
