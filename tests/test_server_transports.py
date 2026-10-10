@@ -352,6 +352,7 @@ async def test_build_classifier_prompt_is_self_contained_and_generic(models_root
         "PHASE 1", "PHASE 2", "PHASE 3", "PHASE 4",
         "target leakage", "list_hyperparameters", "holdout_fraction=0",
         "random_state", "STOP",  # embedded prep checklist, tuning loop, early exit
+        "Possible target leakage",  # leakage-warning review guidance
     ):
         assert needle in text
 

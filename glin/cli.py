@@ -74,6 +74,11 @@ def train(csv_path: str, target: str, name: str, quiet: bool) -> None:
         for message in bundle["preprocessor"].warnings_:
             click.echo(f"  - {message}")
 
+    if bundle["leakage_warnings"]:
+        click.echo("Leakage warnings:")
+        for message in bundle["leakage_warnings"]:
+            click.echo(f"  - {message}")
+
     click.echo("Saving model...")
     model_dir = engine.save_bundle(bundle, DEFAULT_MODELS_ROOT)
 

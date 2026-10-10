@@ -112,7 +112,9 @@ def prep_checklist(target_column: str = "") -> str:
    - Duplicate or near-duplicate columns, leakage columns (anything that
      encodes the target, e.g. a "churned_flag" alongside a "churned"
      target), and obviously irrelevant free-text columns are not
-     detected -- drop them yourself.
+     reliably detected -- drop them yourself. train_model only warns about
+     the extreme case of a single column that all but perfectly separates
+     the target (see step 6).
 
 6. Sanity-check before and after training.
    - Call `list_models` first to make sure you're not about to silently
@@ -122,7 +124,16 @@ def prep_checklist(target_column: str = "") -> str:
    - After training, read the `warnings` and `features_dropped` fields in
      the result -- they tell you exactly what glin decided to ignore, so
      you can catch a mistake (like an important column being dropped as
-     "ID-like") before trusting the model."""
+     "ID-like") before trusting the model.
+   - Review every "Possible target leakage" warning in `warnings`: glin
+     found a single column (named, with the threshold or category mapping
+     as evidence; date columns are named by their raw column) that almost
+     perfectly separates the target, so the target may be a threshold or
+     simple function of it. It is a warning, not an error -- training
+     proceeded. Confirm with the user whether the column would really be
+     known when making a prediction; if not, drop it from the CSV and
+     retrain (a near-perfect score from it is not a good model). Keep it
+     only if the user confirms the relationship is legitimate."""
 
 
 def feature_selection_guide() -> str:
@@ -160,7 +171,11 @@ without -- a large jump from including it is a red flag, not good news.
 
 Red-flag check after every trial: a holdout ROC-AUC above ~0.95, or a \
 log_loss collapsing far below baseline_log_loss, on real-world data almost \
-always means leakage. Go back and re-examine the columns before celebrating.
+always means leakage. Go back and re-examine the columns before celebrating. \
+Also read the "Possible target leakage" entries in `train_model`'s \
+`warnings`: they name single columns that all but perfectly separate the \
+target. Ask the user whether each would be known at prediction time; if not, \
+drop it and retrain before tuning.
 
 Write the cleaned feature set (+ target) to a NEW csv file and pass it as \
 csv_path; never overwrite the original."""
@@ -188,7 +203,8 @@ version of the table below.
 
 2. Establish a baseline: call `train_model` with NO `hyperparameters` and a \
 scratch name (e.g. "{name}_trial") with overwrite=True. Record from the \
-result's `evaluation`:
+result's `evaluation` (and check its `warnings` for "Possible target \
+leakage" first -- drop flagged columns the user can't justify and re-run):
    - log_loss: your primary score; lower is better. Compare it against \
 baseline_log_loss (always guessing the class frequencies) -- if it isn't \
 clearly lower, the features carry little signal and no tuning will fix that.

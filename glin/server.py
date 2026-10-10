@@ -207,6 +207,13 @@ def build_server(
         default. If the result's `warnings` say a numeric column has repeated
         non-numeric values that look like missing-value codes, confirm with
         the user and pass them here.
+
+        Leakage: if a single feature on its own (near-)perfectly separates the
+        target (a threshold of a numeric column, or a category -> class
+        mapping), `warnings` carries a "Possible target leakage" entry naming
+        the column and the evidence. Training still succeeds; confirm with the
+        user that the column would be known at prediction time, otherwise drop
+        it from the CSV and retrain.
         """
         if (csv_path is None) == (csv_content is None):
             raise ValueError("pass exactly one of csv_path or csv_content")

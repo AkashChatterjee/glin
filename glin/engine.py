@@ -31,7 +31,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
 from glin.hyperparameters import HYPERPARAMETERS, resolve_hyperparameters
-from glin.preprocessor import DEFAULT_SUPPRESSION_CODES, EBMTabularPreprocessor
+from glin.leakage import find_leaky_features, leakage_warnings
+from glin.preprocessor import DEFAULT_SUPPRESSION_CODES, NOMINAL, EBMTabularPreprocessor
 from glin.validation import MIN_ROWS, validate_dataset
 
 BUNDLE_FILENAME = "bundle.joblib"
@@ -135,6 +136,10 @@ def train_model(
     ``__day_of_week``, ``__hour`` and ``__days_since_start`` terms (see
     glin.preprocessor); the raw column itself is not a model feature.
 
+    Features that on their own (near-)perfectly separate the target are
+    reported as ``leakage_warnings`` (also appended to ``warnings``); this is
+    a warning only, see glin.leakage.
+
     ``on_progress``, if given, is invoked roughly every ``progress_interval``
     seconds as ``on_progress(best_log_loss_so_far, elapsed_seconds)``. EBM
     trains its bagged ensemble across parallel worker processes, each with
@@ -194,6 +199,18 @@ def train_model(
             "every feature column was dropped (ID-like, constant, or too "
             "high-cardinality) — nothing left to train on"
         )
+
+    source_columns = {
+        name: col for col, names in preprocessor.date_feature_names_.items() for name in names
+    }
+    suspects = find_leaky_features(
+        X,
+        y,
+        target_classes,
+        categorical=[c for c, t in preprocessor.feature_types_.items() if t == NOMINAL],
+        source_columns=source_columns,
+    )
+    leakage = leakage_warnings(suspects, target_column)
 
     ebm_callback = None
     manager = None
@@ -269,8 +286,11 @@ def train_model(
         "evaluation": evaluation,
         "training_rows": len(y),
         "training_seconds": training_seconds,
+        "leakage_suspects": suspects,
+        "leakage_warnings": leakage,
         "warnings": [issue.message for issue in validation.warnings]
-        + preprocessor.warnings_,
+        + preprocessor.warnings_
+        + leakage,
     }
 
 
