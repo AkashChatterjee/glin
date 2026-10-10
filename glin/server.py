@@ -14,6 +14,31 @@ from glin.engine import DEFAULT_MODELS_ROOT
 from glin.hyperparameters import HYPERPARAMETERS
 
 
+def default_allowed_dirs() -> list[Path]:
+    return [Path.home(), Path.cwd()]
+
+
+def resolve_csv_path(csv_path: str, allowed_dirs: list[Path]) -> Path:
+    """Validate a client-supplied CSV path. Errors never echo file contents,
+    and don't reveal whether a path outside the allowed directories exists."""
+    path = Path(csv_path).expanduser()
+    if path.suffix.lower() != ".csv":
+        raise ValueError("csv_path must point to a .csv file")
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        resolved = None
+    roots = [d.resolve() for d in allowed_dirs]
+    if resolved is None or not any(resolved.is_relative_to(r) for r in roots):
+        raise ValueError(
+            "csv_path not found or outside the directories this server may read "
+            "(see `glin serve --allow-dir`)"
+        )
+    if resolved.suffix.lower() != ".csv" or not resolved.is_file():
+        raise ValueError("csv_path must be a regular .csv file")
+    return resolved
+
+
 def _read_only(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title, readOnlyHint=True, destructiveHint=False, openWorldHint=False
@@ -29,7 +54,11 @@ _TRAIN_ANNOTATIONS = ToolAnnotations(
 )
 
 
-def build_server(models_root: Path = DEFAULT_MODELS_ROOT) -> FastMCP:
+def build_server(
+    models_root: Path = DEFAULT_MODELS_ROOT,
+    allowed_dirs: Optional[list[Path]] = None,
+) -> FastMCP:
+    allowed = list(allowed_dirs) if allowed_dirs else default_allowed_dirs()
     mcp = FastMCP("glin")
 
     def _model_dir(model_name: str) -> Path:
@@ -108,10 +137,10 @@ def build_server(models_root: Path = DEFAULT_MODELS_ROOT) -> FastMCP:
         clobbered.
 
         Pass exactly one of:
-        - csv_path: a path on this machine (the server process does the
-          reading itself). Always prefer this -- it works for CSVs of any
-          size without the calling agent ever having to read or reproduce
-          the file's contents itself.
+        - csv_path: a .csv file inside a directory this server allows (it
+          does the reading itself). Always prefer this -- it works for CSVs
+          of any size without the calling agent ever having to read or
+          reproduce the file's contents itself.
         - csv_content: the complete raw CSV text (header row + data rows).
           Only use this when there's no file on disk to point at, e.g.
           data pasted into the chat or assembled in memory. Do not use this for large files --
@@ -155,7 +184,7 @@ def build_server(models_root: Path = DEFAULT_MODELS_ROOT) -> FastMCP:
             )
 
         df = (
-            pd.read_csv(csv_path)
+            pd.read_csv(resolve_csv_path(csv_path, allowed))
             if csv_path is not None
             else pd.read_csv(io.StringIO(csv_content))
         )
@@ -210,6 +239,11 @@ def build_server(models_root: Path = DEFAULT_MODELS_ROOT) -> FastMCP:
     return mcp
 
 
-def run_stdio(models_root: Path = DEFAULT_MODELS_ROOT) -> None:
-    build_server(models_root=models_root).run(transport="stdio")
+def run_stdio(
+    models_root: Path = DEFAULT_MODELS_ROOT,
+    allowed_dirs: Optional[list[Path]] = None,
+) -> None:
+    build_server(models_root=models_root, allowed_dirs=allowed_dirs).run(
+        transport="stdio"
+    )
 

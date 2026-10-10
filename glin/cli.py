@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import click
 import pandas as pd
@@ -141,9 +142,17 @@ def delete(name: str, yes: bool) -> None:
 
 
 @main.command()
-def serve() -> None:
+@click.option(
+    "--allow-dir",
+    "allow_dirs",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory train_model(csv_path=...) may read from; repeatable. "
+    "Defaults to the home and current directories.",
+)
+def serve(allow_dirs: tuple[Path, ...]) -> None:
     """Run the glin MCP server over stdio, for local MCP clients."""
-    server.run_stdio()
+    server.run_stdio(allowed_dirs=list(allow_dirs) or None)
 
 
 if __name__ == "__main__":
