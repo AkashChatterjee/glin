@@ -17,6 +17,7 @@ from mcp.server.fastmcp import FastMCP
 
 from glin import engine
 from glin.engine import DEFAULT_MODELS_ROOT
+from glin.hyperparameters import HYPERPARAMETERS, default_hyperparameters
 from glin.preprocessor import EBMTabularPreprocessor
 from glin.validation import MAX_REASONABLE_TARGET_CLASSES, MIN_ROWS
 
@@ -62,12 +63,22 @@ def build_server(
         return engine.explain_record(bundle, features, top_n=top_n)
 
     @mcp.tool()
+    def list_hyperparameters() -> list[dict[str, Any]]:
+        """Every EBM training hyperparameter `train_model` accepts in its
+        `hyperparameters` argument: name, type, default, allowed range, and
+        what raising/lowering it does. Fetch the `tune_model_hyperparameters`
+        prompt for a search strategy built on these."""
+        return [hp.describe() for hp in HYPERPARAMETERS.values()]
+
+    @mcp.tool()
     def train_model(
         target_column: str,
         model_name: str,
         csv_path: Optional[str] = None,
         csv_content: Optional[str] = None,
         overwrite: bool = False,
+        hyperparameters: Optional[dict[str, Any]] = None,
+        holdout_fraction: float = 0.2,
     ) -> dict[str, Any]:
         """Train an EBM classifier from a CSV and save it as model_name. This
         is also how to retrain an existing model: pass overwrite=True to
@@ -99,6 +110,19 @@ def build_server(
         header, embedded JSON cells, date columns, a continuous-looking
         target, etc.), fetch the `prepare_csv_for_training` prompt first --
         those are judgment calls this tool does not make for you.
+
+        Tuning: `hyperparameters` is an optional object overriding any subset
+        of the knobs listed by `list_hyperparameters` (e.g.
+        {"interactions": 0, "min_samples_leaf": 30}); anything omitted keeps
+        its default, and unknown names or out-of-range values are rejected
+        with an error naming every problem. `holdout_fraction` (default 0.2)
+        sets that share of rows aside, trains on the rest, and reports
+        out-of-sample `evaluation` metrics for the saved model -- compare
+        `evaluation.log_loss` (lower is better) across trials to tune. Because
+        the saved model then saw only the remaining rows, once you've settled
+        on hyperparameters retrain with holdout_fraction=0 and overwrite=True
+        to fit on all the data (no evaluation is reported in that case). See
+        the `tune_model_hyperparameters` prompt for the full loop.
         """
         if (csv_path is None) == (csv_content is None):
             raise ValueError("pass exactly one of csv_path or csv_content")
@@ -115,10 +139,17 @@ def build_server(
             if csv_path is not None
             else pd.read_csv(io.StringIO(csv_content))
         )
-        bundle = engine.train_model(df, target_column, model_name=model_name)
+        bundle = engine.train_model(
+            df,
+            target_column,
+            model_name=model_name,
+            hyperparameters=hyperparameters,
+            holdout_fraction=holdout_fraction,
+        )
         engine.save_bundle(bundle, models_root)
 
         preprocessor = bundle["preprocessor"]
+        term_features = bundle["model"].term_features_
         return {
             "model_name": model_name,
             "target_column": target_column,
@@ -127,6 +158,15 @@ def build_server(
             "features_kept": preprocessor.output_columns_,
             "features_dropped": preprocessor.dropped_columns_,
             "warnings": bundle["warnings"],
+            "hyperparameters": bundle["hyperparameters"],
+            "holdout_fraction": bundle["holdout_fraction"],
+            "training_rows": bundle["training_rows"],
+            "training_seconds": round(bundle["training_seconds"], 2),
+            "terms": {
+                "main_effects": sum(1 for t in term_features if len(t) == 1),
+                "interactions": sum(1 for t in term_features if len(t) > 1),
+            },
+            "evaluation": bundle["evaluation"],
         }
 
     @mcp.prompt()
@@ -222,6 +262,79 @@ happily train a bad model on data it wasn't designed to catch.
 Once the CSV is clean, call `train_model` with csv_path (preferred) or
 csv_content, the exact target column name, and a `model_name` to save it
 under."""
+
+    @mcp.prompt()
+    def tune_model_hyperparameters(model_name: str = "", target_column: str = "") -> str:
+        """Search strategy for tuning an EBM's hyperparameters with train_model."""
+        defaults = default_hyperparameters()
+        knobs = "\n".join(
+            f"   - {hp.name} (default {defaults[hp.name]}, range "
+            f"{hp.minimum:g}..{hp.maximum:g}): {hp.guidance}"
+            for hp in HYPERPARAMETERS.values()
+        )
+        name = model_name or "<final_model_name>"
+        target_line = f" on target '{target_column}'" if target_column else ""
+        return f"""You're going to tune a glin model{target_line} yourself by running \
+`train_model` repeatedly with different `hyperparameters` and comparing the \
+out-of-sample metrics it returns. Work through this loop.
+
+How the model works (so you tune with intent, not at random): an EBM is an \
+additive model -- a separate learned curve per feature, plus a few pairwise \
+interaction tables -- built by cyclic boosting with tiny single-feature \
+trees at a small learning rate, then averaged over `outer_bags` resamples. \
+Every knob trades flexibility against smoothness: fine bins, many \
+interactions, weak regularization and long training fit more detail (and \
+more noise); the opposite settings are smoother and generalize better on \
+small or noisy data. Tuning is finding the flexibility the data can support.
+
+1. Fetch `list_hyperparameters` once if you need the machine-readable \
+version of the table below.
+
+2. Establish a baseline: call `train_model` with NO `hyperparameters` and a \
+scratch name (e.g. "{name}_trial") with overwrite=True. Record from the \
+result's `evaluation`:
+   - log_loss: your primary score; lower is better. Compare it against \
+baseline_log_loss (always guessing the class frequencies) -- if it isn't \
+clearly lower, the features carry little signal and no tuning will fix that.
+   - roc_auc / balanced_accuracy: secondary; prefer balanced_accuracy over \
+accuracy when classes are imbalanced.
+   - train_log_loss vs log_loss: a large gap (train much lower) means \
+overfitting -> move toward smoother settings. A small gap with both high \
+means underfitting -> move toward more flexible settings.
+   - training_seconds: your cost per trial; budget your trial count by it.
+
+3. Search coarse to fine, changing ONE or TWO knobs per trial so you can \
+attribute the change. Suggested order, highest leverage first:
+   a. interactions: try 0 against the default. If 0 is as good, keep it -- a \
+purely additive model is simpler and fully readable per feature.
+   b. min_samples_leaf (and reg_lambda): overfitting controls. Raise them if \
+there's a train/holdout gap.
+   c. max_bins: lower for small data, higher for large.
+   d. learning_rate / early_stopping_rounds / outer_bags: refinements. Use \
+a larger learning_rate and fewer outer_bags to make exploratory trials \
+fast, then restore finer values for the final fit.
+   Stop when a few consecutive trials improve log_loss by less than about \
+1% or less than the run-to-run noise (see 4), or when you hit your trial budget.
+
+4. Know the noise floor: the holdout split is fixed across all your trials, \
+so differences are comparable -- but with a small holdout, small differences \
+are luck. Re-run your best config with two other `random_state` values; if \
+the spread is as large as the gain you were chasing, prefer the simpler \
+configuration. Don't run dozens of trials hunting a tiny gain: every trial \
+tunes you a little more to this one holdout set.
+
+5. Finish: call `train_model` with the winning `hyperparameters`, the REAL \
+model name ({name}), holdout_fraction=0 (train on every row) and \
+overwrite=True only if replacing an existing model. This final model has no \
+`evaluation` of its own -- report the holdout numbers from the winning \
+trial as its expected performance. Tell the user the chosen hyperparameters \
+and the trial table (config -> log_loss, balanced_accuracy, seconds).
+
+Hyperparameters you can set:
+{knobs}
+
+Out-of-range or unknown values are rejected with a message naming every \
+problem, so you can correct and retry."""
 
     return mcp
 
