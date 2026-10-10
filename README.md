@@ -1,46 +1,70 @@
 # glin
 
-☕ If glin is useful to you and you'd like to help maintain it, you can [buy me a coffee](https://buymeacoffee.com/akashchatterjee).
+☕ If glin is useful to you and you want to help maintain it, you can [buy me a coffee](https://buymeacoffee.com/akashchatterjee).
 
-CLI tool and Python library that equips AI agents with an instant, statistical "gut feeling" (System 1 thinking).
+glin is a CLI tool and Python library. It gives AI agents a fast, statistical "gut feeling" (System 1 thinking).
 
-`glin` trains an [Explainable Boosting Machine](https://interpret.ml/) on a CSV, then exposes it to LLM agents over [MCP](https://modelcontextprotocol.io/) — locally over stdio. Every prediction comes with an exact, zero-approximation breakdown of which features drove it, straight from the model's own additive structure (no SHAP/LIME approximation).
+glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a CSV. It then gives the model to LLM agents through [MCP](https://modelcontextprotocol.io/), locally over stdio. Each prediction comes with an exact breakdown of the features that drove it. The breakdown comes from the additive structure of the model. It is not a SHAP or LIME approximation.
 
-> glin is local-only (stdio); there is no remote/HTTP mode. v0.1.3 is the last release that had one.
+> glin runs locally only (stdio). It has no remote or HTTP mode. Version 0.1.3 is the last release that had one.
+
+**Case study:** [Child stunting across Indian districts (NFHS-5)](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-child-stunting-nfhs5). A glin model flags districts with high child stunting. Claude calls the model through MCP.
+
+## Contents
+
+- [Install](#install)
+  - [Install for development](#install-for-development)
+- [Train a model](#train-a-model)
+  - [List and delete models](#list-and-delete-models)
+  - [Excel input](#excel-input-xlsx--xls)
+- [Use glin with an MCP client](#use-glin-with-an-mcp-client)
+- [Tools exposed over MCP](#tools-exposed-over-mcp)
+- [Prompts exposed over MCP](#prompts-exposed-over-mcp)
+- [Restricting `csv_path`](#restricting-csv_path)
+- [Let an agent tune the model](#let-an-agent-tune-the-model)
+  - [Grouped holdout](#grouped-holdout)
+- [Example: ask Claude directly](#example-ask-claude-directly)
+- [Case study](#case-study)
+- [Data requirements](#data-requirements)
+  - [Feature columns: supported today](#feature-columns-supported-today)
+  - [Dates and timestamps](#dates-and-timestamps)
+  - [Feature columns: not yet supported](#feature-columns-not-yet-supported)
+  - [Target leakage check](#target-leakage-check)
+  - [Target column requirements](#target-column-requirements)
+- [Known issues](#known-issues)
+- [Releasing (maintainers)](#releasing-maintainers)
 
 ## Install
 
-The PyPI package is named `glin-ml` (the name `glin` was already taken by an unrelated project) — but the CLI command and Python import are both just `glin`.
+The PyPI package is named `glin-ml`. The name `glin` belongs to an unrelated project. The CLI command and the Python import are both `glin`.
+
+Choose one command:
 
 ```bash
-uv tool install glin-ml     # recommended: installs the `glin` command in an isolated env
+uv tool install glin-ml     # recommended: installs the `glin` command in an isolated environment
+pipx install glin-ml        # same result, with pipx
+pip install glin-ml         # installs into the active environment
 ```
 
-```bash
-pipx install glin-ml        # equivalent, if you use pipx instead of uv
-```
+To read Excel files (`.xlsx` and `.xls`), install the optional extra: `uv tool install 'glin-ml[excel]'` or `pip install 'glin-ml[excel]'`. See [Excel input](#excel-input-xlsx--xls).
 
-```bash
-pip install glin-ml         # plain pip also works, into whatever environment is active
-```
-
-To read Excel files (`.xlsx` / `.xls`), install the optional extra: `uv tool install 'glin-ml[excel]'` or `pip install 'glin-ml[excel]'` (see [Excel input](#excel-input-xlsx--xls)).
-
-Either way, you get the `glin` command:
+Then check the install:
 
 ```bash
 glin --help
 ```
 
-**For development** (editable install from a clone of this repo):
+### Install for development
+
+Install an editable copy from a clone of this repository:
 
 ```bash
 git clone https://github.com/AkashChatterjee/glin.git
 cd glin
-pip install -e ".[dev]"      # dev also pulls in the Excel libraries (plus xlwt, to build .xls test fixtures)
+pip install -e ".[dev]"      # also installs the Excel libraries, and xlwt to build .xls test files
 ```
 
-glin works with both the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1,<3`); the test suite runs against each. To test a specific line, add a constraint, e.g. `pip install -e ".[dev]" "mcp>=2,<3"`.
+glin works with the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1,<3`). The test suite runs against each line. To test one line, add a constraint. For example: `pip install -e ".[dev]" "mcp>=2,<3"`.
 
 ## Train a model
 
@@ -48,11 +72,19 @@ glin works with both the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1,<3`); the t
 glin train path/to/data.csv --target churn --name churn_v1
 ```
 
-Models are saved under `~/.glin/models/<name>/`.
+glin saves each model in `~/.glin/models/<name>/`.
+
+### List and delete models
+
+```bash
+glin list
+glin delete churn_v1        # asks for confirmation
+glin delete churn_v1 --yes  # skips the question
+```
 
 ### Excel input (`.xlsx` / `.xls`)
 
-Spreadsheets as published by governments and analysts train directly, banner rows and merged headers included. Excel support is an optional extra so the base install stays lean (`openpyxl` reads `.xlsx`, `xlrd` reads legacy `.xls`):
+Spreadsheets from governments and analysts train directly. This includes banner rows and merged headers. Excel support is an optional extra, so the base install stays small. `openpyxl` reads `.xlsx` files. `xlrd` reads old `.xls` files.
 
 ```bash
 pip install 'glin-ml[excel]'
@@ -61,23 +93,16 @@ glin train report.xlsx --sheet "Data 2023" --target outcome --name r_v1    # nam
 glin train report.xlsx --sheet 2 --header-rows 3-4 --target outcome --name r_v1
 ```
 
-- **Sheet:** `--sheet` takes a name or a 1-based position. A single-sheet workbook needs no flag; a multi-sheet one without `--sheet` is an error that lists the sheets.
-- **Header detection:** with no `--header-rows`, glin finds the first mostly-filled, label-like row and skips title/banner rows above it, blank rows, and trailing single-cell footnotes. If that is ambiguous (e.g. a sparse group-label row sits directly above or below the header row, or the first full row looks like data) it stops with an error naming the rows and asking for `--header-rows` rather than guessing.
-- **`--header-rows`:** 1-based row numbers as shown in Excel: `4`, `3-4` or `3,4`. Multi-row headers are flattened into one name per column joined with ` - ` (`2023 - sales`); blank cells in upper header rows continue the label to their left (merged group headers), blanks and repeated parts are dropped, and duplicate names get `_2`, `_3` suffixes. Data starts below the last header row. The sheet, header rows and number of rows read are printed.
-- Cell values come from the file's cached results, so formulas must have been calculated and saved by a spreadsheet app. Fully empty rows and columns are dropped. CSV behaviour is unchanged, and `--sheet`/`--header-rows` are rejected for CSV.
+- **Sheet:** `--sheet` takes a name or a 1-based position. A workbook with one sheet needs no flag. A workbook with several sheets and no `--sheet` gives an error that lists the sheets.
+- **Header detection:** Without `--header-rows`, glin finds the first row that is mostly filled and looks like labels. It skips title rows above it, blank rows and single-cell footnotes at the end. If the choice is not clear, glin stops with an error. The error names the rows and asks for `--header-rows`. glin does not guess. Two cases are not clear. In the first, a sparse group-label row sits next to the header row. In the second, the first full row looks like data.
+- **`--header-rows`:** Use 1-based row numbers as shown in Excel: `4`, `3-4` or `3,4`. glin joins a multi-row header into one name for each column with ` - `, for example `2023 - sales`. A blank cell in an upper header row continues the label from the cell on its left (merged group headers). glin drops blanks and repeated parts. Duplicate names get the suffixes `_2` and `_3`. Data starts below the last header row. glin prints the sheet, the header rows and the number of rows it read.
+- **Formulas:** glin uses the cached results of the cells. A spreadsheet app must calculate and save the formulas first.
+- **Empty rows and columns:** glin drops fully empty rows and columns.
+- **CSV files:** CSV behavior does not change. `--sheet` and `--header-rows` are errors for CSV files.
 
-```bash
-glin list
-```
+## Use glin with an MCP client
 
-```bash
-glin delete churn_v1        # prompts for confirmation
-glin delete churn_v1 --yes  # skips the prompt
-```
-
-## Use it locally (Claude Desktop, Cursor, ...)
-
-Add to your MCP client's config (e.g. `claude_desktop_config.json`):
+Add glin to the config of your MCP client, for example Claude Desktop or Cursor. In Claude Desktop, the file is `claude_desktop_config.json`:
 
 ```json
 {
@@ -92,130 +117,233 @@ Add to your MCP client's config (e.g. `claude_desktop_config.json`):
 
 ## Tools exposed over MCP
 
-Every tool carries MCP annotations (title, `readOnlyHint`, `destructiveHint`): all are read-only except `train_model`, which is flagged destructive since `overwrite=True` replaces an existing model — so clients can auto-approve the former and confirm the latter.
+Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All tools are read-only except `train_model`. `train_model` is marked destructive because `overwrite=True` replaces a model. A client can approve the read-only tools automatically and ask before it runs `train_model`.
 
-- `list_models()` — all trained models available.
-- `inspect_model(model_name)` — feature schema and target classes. Date columns are listed under `features.date`, each with its derived terms and the `start_date` that `days_since_start` counts from.
-- `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: `base_logit` (the intercept), every term's contribution (sorted by magnitude), and an explicit additivity check (`additivity_verified`) comparing `reconstructed_probability` with `model_probability`, both keyed by class name. For binary targets, `score_class` names the class (the alphabetically second) that the scores and `base_logit` refer to: they are log-odds for `score_class`, so a positive score pushes toward it and a negative one toward the other class. Multiclass targets report a per-class `base_logit` and `score_by_class` per term. Also returns `warnings` for inputs the model never saw (each with `feature`, `value`, `issue` of `unseen_category`, `out_of_range` or `unparseable_date`, and the `training_range` for numerics and dates) and `missing_features` for absent/blank inputs, which are valid but reported separately. Pass a date column as its raw value (`"signup_date": "2024-03-06"`); glin derives the same `signup_date__*` terms as at training time, so contributions name them individually (`signup_date__day_of_week` = `sat`), and a date that is absent, blank or unparseable is treated as missing (unparseable adds a warning).
-- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2, holdout_group_column=None, suppression_codes=None)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a `.csv`, `.xlsx` or `.xls` file the server may read — see [Restricting `csv_path`](#restricting-csv_path); always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). `holdout_group_column` makes the holdout a [grouped holdout](#grouped-holdout). `suppression_codes` overrides the tokens treated as missing in numeric columns (default `["SUPP", "NE", "NP", "z"]`; see the data-requirements table). Returns the kept/dropped features (`date_columns` maps each expanded date column to its derived terms), the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below). For Excel files (needs `glin-ml[excel]`) two more arguments apply, `sheet` (name or 1-based position; required for multi-sheet workbooks) and `header_rows` (`4`, `"3-4"` or `[3, 4]`; auto-detected when omitted, see [Excel input](#excel-input-xlsx--xls)), and the result also reports the `sheet` and `header_rows` actually used. `warnings` also carries any "Possible target leakage" entries (see [Target leakage check](#target-leakage-check)).
-- `explain_model(model_name, top_n=15, include_shapes=True)` — what the model learned, globally and exactly (read off the additive structure, not sampled from example predictions): every feature ranked by mean absolute log-odds contribution with its main-effect vs interaction split, the top terms including pairwise interactions with their share of the total, and for binary targets a per-feature shape (which categories or value ranges push toward which class).
-- `list_hyperparameters()` — every tunable EBM hyperparameter with its type, default, allowed range, and a note on what raising or lowering it does.
+- `list_models()` lists all trained models.
+- `inspect_model(model_name)` returns the feature schema and the target classes. It lists date columns under `features.date`. Each date column shows its derived terms and the `start_date` that `days_since_start` counts from.
+- `predict(model_name, features, top_n=10)` returns the predicted class and the probabilities, plus a full audit:
+  - `base_logit` is the intercept.
+  - `contributions` lists the contribution of every term, sorted by size.
+  - `additivity_verified` checks that `reconstructed_probability` equals `model_probability`. Both are keyed by class name.
+  - For binary targets, `score_class` is the alphabetically second class. The scores and `base_logit` are log-odds for this class. A positive score pushes toward it. A negative score pushes toward the other class.
+  - For multiclass targets, `base_logit` is per class, and each term has `score_by_class`.
+  - `warnings` lists inputs that the model never saw. Each warning has `feature`, `value` and `issue`. The issue is `unseen_category`, `out_of_range` or `unparseable_date`. Numeric and date warnings also have `training_range`.
+  - `missing_features` lists inputs that are absent or blank. These inputs are valid. glin reports them separately.
+  - To send a date, pass the raw value, for example `"signup_date": "2024-03-06"`. glin derives the same `signup_date__*` terms as at training time. Contributions name each term, for example `signup_date__day_of_week` = `sat`. A date that is absent, blank or not parseable counts as missing. A date that does not parse also adds a warning.
+- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2, holdout_group_column=None, suppression_codes=None)` trains a new model. It can also retrain an existing model on new data with `overwrite=True`. If the name exists and `overwrite` is not set, the call fails. Nothing is replaced by accident.
+  - Pass exactly one of `csv_path` and `csv_content`.
+  - `csv_path` is a `.csv`, `.xlsx` or `.xls` file that the server can read. See [Restricting `csv_path`](#restricting-csv_path). Use it for local stdio setups. It works for files of any size, and the agent never copies the file contents.
+  - `csv_content` is the raw CSV text. Use it only when the client and the server share no file system, and only for small data. Tens of thousands of rows in a tool argument are slow and use a lot of context.
+  - `holdout_group_column` makes the holdout a [grouped holdout](#grouped-holdout).
+  - `suppression_codes` replaces the tokens that count as missing in numeric columns. The default is `["SUPP", "NE", "NP", "z"]`. See [Feature columns: supported today](#feature-columns-supported-today).
+  - For Excel files (they need `glin-ml[excel]`), two more arguments apply. `sheet` is a name or a 1-based position. It is required for workbooks with several sheets. `header_rows` is `4`, `"3-4"` or `[3, 4]`. glin detects it if you omit it. See [Excel input](#excel-input-xlsx--xls). The result shows the `sheet` and `header_rows` that glin used.
+  - The result has the kept and dropped features, the resolved `hyperparameters`, `training_seconds` and the term counts. `date_columns` maps each expanded date column to its derived terms. If `holdout_fraction > 0`, the result also has an `evaluation` block of out-of-sample metrics. See [Let an agent tune the model](#let-an-agent-tune-the-model).
+  - `warnings` has the reason for each dropped column and any "Possible target leakage" entries. See [Target leakage check](#target-leakage-check).
+- `explain_model(model_name, top_n=15, include_shapes=True)` shows what the model learned. glin reads it exactly from the additive structure. It does not sample example predictions. The result has:
+  - every feature, ranked by mean absolute log-odds contribution, with its main-effect part and its interaction part;
+  - the top terms, including pairwise interactions, with their share of the total;
+  - for binary targets, a shape for each feature that shows which categories or value ranges push toward which class (see [Known issues](#known-issues)).
+- `list_hyperparameters()` lists every EBM hyperparameter. Each entry has its type, default, allowed range and a note on what a higher or lower value does.
+
+## Prompts exposed over MCP
+
+- `build_classifier(csv_path="", target_column="", model_name="")` runs the whole workflow for any dataset in one prompt:
+  1. Inspect and clean the CSV.
+  2. Decide which columns are real predictors. Drop target leakage, such as text that describes the outcome, identifiers, free text and dates after the outcome.
+  3. Tune the hyperparameters with these guardrails against overfitting:
+     - a fixed holdout;
+     - a budget of about 10 trials;
+     - a check of the gap between train and holdout;
+     - a check of seed noise;
+     - a preference for the simpler configuration;
+     - an early exit when the features carry no signal.
+  4. Refit on all rows.
+  5. Report the expected performance honestly.
+
+  Select it in the prompt picker of your MCP client. Claude Desktop lists server prompts in the attach (`+`) menu. Give it a file path and a target. All other arguments are optional. The prompt is self-contained, because clients show prompts to the user and do not let the agent fetch them.
+- `tune_model_hyperparameters(model_name="", target_column="")` runs the tuning loop in [Let an agent tune the model](#let-an-agent-tune-the-model). It includes the live hyperparameter table. glin reads the defaults and ranges from the code.
+- `prepare_csv_for_training(target_column="")` is a checklist for an agent to follow before it calls `train_model`. It covers:
+  - parsing problems: banner rows, a wrong delimiter, ragged rows, and the choice of Excel sheet and header rows;
+  - how to choose a valid target column;
+  - what the preprocessor already handles: dirty numeric formats, date and timestamp expansion, missing values, and identifier-like, constant and high-cardinality columns;
+  - what the preprocessor does not handle: dates stored as bare numbers, embedded JSON or list cells, leakage columns and targets that look continuous.
+
+  glin reads this guidance from the actual defaults of the preprocessor, so it cannot drift from the code.
 
 ## Restricting `csv_path`
 
-`train_model(csv_path=...)` (the parameter name is kept for compatibility; it also takes Excel files) only reads a regular file ending in `.csv`, `.xlsx` or `.xls` whose fully resolved path (symlinks and `..` followed) lies inside an allowed directory. Directories, devices, other extensions, missing files, traversal and symlinks pointing outside are rejected with an error that never includes file contents. By default the allowed directories are the server's home and working directories; override with a repeatable flag:
+`train_model(csv_path=...)` reads only a regular file that ends in `.csv`, `.xlsx` or `.xls`. The name `csv_path` stays for compatibility, and it also takes Excel files. The fully resolved path (symlinks and `..` followed) must be inside an allowed directory. glin rejects directories, devices, other extensions, missing files, path traversal and symlinks that point outside. The error never includes file contents. By default, the allowed directories are the home directory and the working directory of the server. To change them, use a repeatable flag:
 
 ```bash
 glin serve --allow-dir /data/csvs --allow-dir /srv/uploads
 ```
 
-`csv_content` is unaffected. In your MCP client config, add the flags to `args`, e.g. `["serve", "--allow-dir", "/data/csvs"]`.
+`csv_content` is not affected. In the config of your MCP client, add the flags to `args`, for example `["serve", "--allow-dir", "/data/csvs"]`.
 
-## Letting an agent tune the model
+## Let an agent tune the model
 
-An EBM is a sum of one learned curve per feature (plus a few pairwise interaction tables), fit by cyclic boosting with tiny single-feature trees. Its knobs mostly trade flexibility against smoothness, so they're exposed through `train_model(hyperparameters={...})`: `max_bins`, `max_interaction_bins`, `interactions`, `learning_rate`, `max_rounds`, `early_stopping_rounds`, `validation_size`, `outer_bags`, `inner_bags`, `min_samples_leaf`, `max_leaves`, `reg_alpha`, `reg_lambda`, `smoothing_rounds`, `greedy_ratio`, `random_state`. Omitted ones keep their defaults; unknown names, wrong types, and out-of-range values are rejected with a message listing every problem. They are defined once in `glin/hyperparameters.py`, which is also where to add or widen one.
+An EBM is a sum of one learned curve for each feature, plus a few pairwise interaction tables. Cyclic boosting with tiny single-feature trees fits it. Most of its settings trade flexibility against smoothness. `train_model(hyperparameters={...})` exposes them: `max_bins`, `max_interaction_bins`, `interactions`, `learning_rate`, `max_rounds`, `early_stopping_rounds`, `validation_size`, `outer_bags`, `inner_bags`, `min_samples_leaf`, `max_leaves`, `reg_alpha`, `reg_lambda`, `smoothing_rounds`, `greedy_ratio` and `random_state`. Settings that you omit keep their defaults. glin rejects unknown names, wrong types and values out of range. The error message lists every problem. `glin/hyperparameters.py` defines each setting once. Add or widen a setting there.
 
-To give the agent something to optimize, `train_model` holds out `holdout_fraction` of the rows (stratified, split seeded independently of the model's `random_state` so every trial is scored on the same rows), trains on the rest, and returns `evaluation`: `log_loss`, `baseline_log_loss` (class-frequency guess), `train_log_loss` (compare for over/underfitting), `accuracy`, `balanced_accuracy`, `roc_auc`. The same hyperparameters and metrics are saved in the model's metadata. The `tune_model_hyperparameters` prompt walks the agent through the loop: baseline → vary one or two knobs at a time → check seed noise → refit on all rows with `holdout_fraction=0`. Trials should use a scratch `model_name` with `overwrite=True`; the CLI's `glin train` still trains on every row with default hyperparameters.
+An agent needs a score to optimize. `train_model` holds out `holdout_fraction` of the rows and trains on the rest. The holdout is stratified. Its split uses a seed that does not depend on `random_state`, so every trial is scored on the same rows. The result has an `evaluation` block:
+
+- `log_loss`
+- `baseline_log_loss` (a guess from the class frequencies)
+- `train_log_loss` (compare it with `log_loss` to see overfitting or underfitting)
+- `accuracy`
+- `balanced_accuracy`
+- `roc_auc`
+
+glin saves the hyperparameters and the metrics in the metadata of the model.
+
+The `tune_model_hyperparameters` prompt guides the agent through this loop:
+
+1. Train a baseline.
+2. Change one or two settings at a time.
+3. Check the seed noise.
+4. Refit on all rows with `holdout_fraction=0`.
+
+Trials must use a scratch `model_name` with `overwrite=True`. `glin train` on the command line trains on every row with the default hyperparameters.
 
 ### Grouped holdout
 
-Rows from the same state, region, customer, site or user resemble each other, so a random holdout puts near-duplicates on both sides and the metrics come out optimistic (in one real case a model scoring 82% / 0.89 AUC on a random holdout scored 63% / 0.77 on states it had never seen). Pass `holdout_group_column="state"` (any column) to `train_model` and whole groups are held out instead, until about `holdout_fraction` of the rows are held out; the rest train.
+Rows from the same state, region, customer, site or user look alike. A random holdout puts near-duplicates on both sides, so the metrics are too optimistic. In one real case, a model scored 82% accuracy and 0.89 AUC on a random holdout. It scored 63% and 0.77 on states that it never saw.
 
-- The split is seeded independently of `random_state` (same rows every trial). Among 25 seeded group orderings it keeps the one whose holdout class shares are closest to the overall shares.
-- The group column stays a normal feature, so held-out groups hit the unseen-category path at prediction time. Preprocessing is fitted on the training rows only.
-- `evaluation` additionally reports `holdout_group_column`, `holdout_groups` and `train_groups` (missing values count as one group); the column name is also saved in the model metadata.
-- Rejected with a clear error: a column that doesn't exist or is the target, fewer than 5 distinct non-null groups, one group holding more than half the rows, or a split whose holdout would have fewer than 2 classes (or leave a class out of training). With `holdout_fraction=0` the column is ignored and a warning is returned.
-- The `build_classifier` and `tune_model_hyperparameters` prompts tell the agent to use it when such a column exists and to report that holdout as the honest estimate. The CLI's `glin train` has no holdout, so it has no equivalent.
+Pass `holdout_group_column="state"` (or any other column) to `train_model`. glin then holds out whole groups until about `holdout_fraction` of the rows are in the holdout. The other rows train the model.
 
-## Prompts exposed over MCP
+- The split uses a seed that does not depend on `random_state`, so every trial uses the same rows. glin tries 25 seeded group orders. It keeps the order whose holdout class shares are closest to the overall class shares.
+- The group column stays a normal feature. A held-out group therefore takes the unseen-category path at prediction time. glin fits the preprocessing on the training rows only.
+- `evaluation` also reports `holdout_group_column`, `holdout_groups` and `train_groups`. Missing values count as one group. glin also saves the column name in the model metadata.
+- glin rejects these cases with a clear error:
+  - the column does not exist, or it is the target;
+  - fewer than 5 distinct non-null groups exist;
+  - one group has more than half of the rows;
+  - the holdout has fewer than 2 classes, or the split leaves a class out of training.
 
-- `build_classifier(csv_path="", target_column="", model_name="")` — the whole workflow in one prompt, for any dataset: inspect and clean the CSV, decide which columns are real predictors (dropping target leakage such as outcome-describing text, identifiers, free text and post-outcome dates), tune hyperparameters with overfitting guardrails (fixed holdout, ~10-trial budget, train-vs-holdout gap check, seed-noise check, prefer-the-simpler-config rule, and an early exit when the features carry no signal), refit on all rows, and report honest expected performance. Select it from your MCP client's prompt picker (Claude Desktop lists server prompts in the attach/`+` menu) and give it a file path and target; everything else is optional. It is self-contained, since clients show prompts to the user rather than letting the agent fetch them.
-- `tune_model_hyperparameters(model_name="", target_column="")` — the tuning loop described above, with the live hyperparameter table (defaults and ranges read from the code) embedded.
-- `prepare_csv_for_training(target_column="")` — a checklist an agent should work through before calling `train_model`: parsing gotchas (banner rows, wrong delimiter, ragged rows, Excel sheet and header-row selection), how to pick a valid target column, what `glin`'s preprocessor already handles automatically (dirty numeric formatting, date/timestamp expansion, missing values, ID-like/constant/high-cardinality columns), and what it doesn't (dates stored as bare numbers, embedded JSON/list cells, leakage columns, continuous-looking targets) — all pulled live from the preprocessor's actual defaults, so the guidance can't drift out of sync with the code.
+  If `holdout_fraction=0`, glin ignores the column and returns a warning.
+- The `build_classifier` and `tune_model_hyperparameters` prompts tell the agent to use this option when such a column exists. They also tell the agent to report this holdout as the honest estimate.
+- `glin train` has no holdout, so it has no equivalent.
 
 ## Example: ask Claude directly
 
-Once a model's trained and the MCP server is attached (see above), just talk to Claude in plain language — no need to know the tool schema:
+When a model is trained and the MCP server is attached, talk to Claude in plain language. You do not need to know the tool schema.
 
 > "I've got 3 deals to prioritize before quarter close: Northwind Systems ($42k, Opportunity stage, came from a referral, VP contact, owned by Carla Nguyen, 8 touches logged), Summit Retail Group ($8k, still a Lead, paid social source, owned by Brian Kessler), and Anchor Nonprofit ($3k, still a Lead, owned by Frank Suarez, no activity logged yet). Run them through deal_predictor_v1 and tell me which to prioritize."
 
-Claude calls `predict` once per deal and comes back with a ranked, *explained* answer, not just a number:
+Claude calls `predict` once for each deal. It returns a ranked answer with reasons, not only a number:
 
-| Deal | Win Prob | Why |
+| Deal | Win probability | Why |
 |---|---|---|
-| Northwind Systems | 69% | Opportunity stage + referral + VP contact all favor it; $42k deal size is the one drag |
-| Summit Retail Group | 35% | Still Lead stage + paid social source — both large, unopposed drags |
-| Anchor Nonprofit | 34% | Zero logged activity, still a Lead — nothing in the record favors it |
+| Northwind Systems | 69% | The Opportunity stage, the referral and the VP contact all favor it. The $42k deal size is the one drag. |
+| Summit Retail Group | 35% | It is still a Lead, and it came from paid social. Both are large drags with nothing against them. |
+| Anchor Nonprofit | 34% | No activity is logged and it is still a Lead. Nothing in the record favors it. |
 
-Worth knowing before you ask: any field you don't mention comes through as missing to the model, not as "average" — so naming a rep and a lifecycle stage (using the model's own trained categories, e.g. `Lead` / `Opportunity` / `Customer`) matters far more for a well-differentiated answer than adding extra color to fields the model already has.
+Note: a field that you do not mention reaches the model as missing. It does not reach the model as "average". Name a rep and a lifecycle stage, and use the categories that the model learned, for example `Lead`, `Opportunity` and `Customer`. This gives a better answer than extra detail in fields that the model already has.
+
+## Case study
+
+[Child stunting across Indian districts (NFHS-5)](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-child-stunting-nfhs5) uses glin on real public-sector data. A glin model predicts whether a district has high child stunting. Claude calls the model through MCP. The model gives the exact reason for each prediction.
 
 ## Data requirements
 
-`glin train` validates your data (CSV or a sheet of an Excel workbook, after header detection) before doing any work — hard problems (e.g. a target column with only one class) stop training with a clear error; soft issues (e.g. a numeric target with many distinct values) print a warning and training proceeds anyway. These rules live in `glin/validation.py` as a flat, appendable list, so support for a currently-unsupported shape below can be added by adding one rule and one preprocessing case, without touching the rest of the pipeline.
+`glin train` checks your data before it does any work. The data is a CSV, or a sheet of an Excel workbook after header detection. A hard problem stops training with a clear error. An example is a target column with only one class. A soft problem prints a warning, and training continues. An example is a numeric target with many distinct values.
 
-**Feature columns — supported today:**
+The rules are in `glin/validation.py` as a flat list. To support a new data shape, add one rule and one preprocessing case. The rest of the pipeline does not change.
+
+### Feature columns: supported today
 
 | Data shape | What happens |
 |---|---|
-| Numeric (int/float), including `NaN` | Passed through as-is; EBM natively bins missing values into their own split. Kept even when nearly every value is distinct, as long as some value repeats or the values are fractional (e.g. rupee amounts, measurements). Only a column of all-distinct whole numbers (a row index, shuffled `1..N`, large unique IDs) is dropped as an identifier; see the row-identifiers line below. |
-| Dirty numeric strings (blanks, e.g. `" "` for a new customer's total charges) | Coerced to `float64` if ≥80% of non-null values parse as numbers; unparseable cells become `NaN`. |
-| Categorical strings, any cardinality up to 250 unique values | Standardized (lowercased, stripped) and one-hot-style binned by EBM; missing/unseen values map to a `__missing__` sentinel. |
-| Currency / thousands-separated strings (`$1,234.56`, `£1,234`, `€1.234,56`, `(1,234)`) | Currency symbols and whitespace are stripped, then the column is coerced as above. A decimal comma is used only when the column has unambiguous European values (`1.234,56`, `12,5`, `1.234.567`); a bare `1,234` is read as a thousands group. Columns mixing both conventions are parsed as US and a warning is returned. |
-| Percent strings (`44.98%`, `12 %`, `(5%)`) | A trailing `%` is stripped before coercion, so the value stays in percentage points (`44.98%` -> `44.98`, not `0.4498`); it combines with the currency/thousands handling above. Mixing `50%` and `50` in one column gives both the same value. |
-| Suppression codes in numeric columns (`SUPP`, `NE`, `NP`, `z`) | Treated as missing (`NaN`), ignored when deciding whether the column is numeric, so such a column stays numeric and is not demoted to categorical or dropped by the cardinality rules. Matching is case-insensitive and ignores surrounding whitespace. The set is configurable: `EBMTabularPreprocessor(suppression_codes=[...])` or `train_model(suppression_codes=[...])` (a list replaces the default). Categorical columns are left alone, so `NE` as a region stays a category. If a numeric column also has a few short, repeated non-numeric values that are not in the set (e.g. `x`, `c`), they are still treated as missing and `train_model` returns a warning suggesting the `suppression_codes` to confirm them. |
-| Boolean columns | Treated as a 0/1 continuous numeric feature. |
-| Dates / timestamps (strings such as `2024-03-06`, `2024-03-06 14:30:00`, `2024-03-06T14:30:00Z`, `03/06/2024`, `6 Mar 2024`, `Mar 6, 2024`; real datetimes when calling the Python API) | Detected when ≥80% of non-null values are full calendar dates (`EBMTabularPreprocessor(date_parse_threshold=...)`), checked before the ID/cardinality rules so a unique-per-row date is not dropped. Expanded into named terms: `<col>__year`, `<col>__month` (`jan`..`dec`), `<col>__day_of_week` (`mon`..`sun`), `<col>__hour` and `<col>__days_since_start` (whole days since the earliest training date, stored with the model and shown by `inspect_model`). Month and day-of-week are categorical so explanations read `signup_date__day_of_week = sat`; the rest are ordered numerics. Parts that never vary in training are dropped (single-year data has no `__year`; date-only data has no `__hour`; a column with one distinct date is dropped). No sin/cos encodings: an EBM learns a free-form curve per feature, so December-to-January wrap-around is already representable, while sin/cos terms would be unreadable. Timezone-aware values are converted to UTC. `dd/mm` vs `mm/dd` is inferred from the values (a field above 12); if nothing settles it, month-first is assumed and `train_model` returns a warning (use ISO `YYYY-MM-DD` to avoid it). Values that don't parse become missing (with a warning). **Bare numbers are never dates**: years, `20240306`, epoch seconds and IDs stay numeric, and month-only/quarter strings (`Jan`, `Q1 2020`) or version strings (`1.2.3`) stay categorical. Convert those to date strings first if the date matters. At predict time, send the raw date; out-of-range dates (outside the training date range) return an `out_of_range` warning, unparseable ones `unparseable_date`, and a derived month/weekday never seen in training `unseen_category`. |
+| Numeric (int, float), including `NaN` | glin passes the values through. EBM puts missing values in their own bin. glin keeps a column with almost all distinct values if a value repeats or the values have decimals, for example rupee amounts. It drops only a column of all-distinct whole numbers as an identifier (a row index, a shuffled `1..N`, or large unique IDs). See "Row identifiers" below. |
+| Dirty numeric strings (blanks, for example `" "` for the total charges of a new customer) | glin converts the column to `float64` if at least 80% of the non-null values parse as numbers. Cells that do not parse become `NaN`. |
+| Categorical strings, up to 250 unique values | glin lowercases and strips the text. EBM bins each category. Missing and unseen values map to a `__missing__` marker. |
+| Currency and thousands-separated strings (`$1,234.56`, `£1,234`, `€1.234,56`, `(1,234)`) | glin removes currency symbols and spaces, then converts the column as above. glin reads a decimal comma only when the column has clear European values (`1.234,56`, `12,5`, `1.234.567`). A plain `1,234` is a thousands group. A column that mixes both styles is parsed as US style, and glin returns a warning. |
+| Percent strings (`44.98%`, `12 %`, `(5%)`) | glin removes the trailing `%` before it converts the value. The value stays in percentage points: `44.98%` becomes `44.98`, not `0.4498`. This works together with the currency rules. `50%` and `50` in one column give the same value. |
+| Suppression codes in numeric columns (`SUPP`, `NE`, `NP`, `z`) | glin treats these codes as missing (`NaN`). It ignores them when it decides if a column is numeric, so the column stays numeric. Matching ignores case and surrounding spaces. To change the set, use `EBMTabularPreprocessor(suppression_codes=[...])` or `train_model(suppression_codes=[...])`. A list replaces the default. Categorical columns do not change, so `NE` as a region stays a category. A numeric column can also have a few short, repeated non-numeric values that are not in the set, for example `x` or `c`. glin still treats them as missing. `train_model` then returns a warning that suggests the `suppression_codes` to confirm. |
+| Boolean columns | glin treats them as a 0/1 continuous numeric feature. |
+| Dates and timestamps | glin detects them and splits them into named terms. See [Dates and timestamps](#dates-and-timestamps). |
 
-**Feature columns — not yet supported:**
+### Dates and timestamps
 
-| Data shape | What actually happens | Why |
+These strings work: `2024-03-06`, `2024-03-06 14:30:00`, `2024-03-06T14:30:00Z`, `03/06/2024`, `6 Mar 2024` and `Mar 6, 2024`. Real datetimes work in the Python API.
+
+- **Detection:** At least 80% of the non-null values must be full calendar dates. You can change the threshold with `EBMTabularPreprocessor(date_parse_threshold=...)`. glin checks dates before the identifier and cardinality rules, so a date that is unique for each row stays.
+- **Terms:** glin makes `<col>__year`, `<col>__month` (`jan` to `dec`), `<col>__day_of_week` (`mon` to `sun`), `<col>__hour` and `<col>__days_since_start`. `days_since_start` counts whole days since the earliest training date. glin stores that date with the model, and `inspect_model` shows it.
+- **Reading explanations:** Month and day of week are categorical, so an explanation reads `signup_date__day_of_week = sat`. The other terms are ordered numbers.
+- **Dropped parts:** glin drops a part that never changes in training. Single-year data has no `__year`. Date-only data has no `__hour`. A column with one distinct date is dropped.
+- **No sin/cos terms:** An EBM learns a free-form curve for each feature, so it can already show the December-to-January wrap-around. Sin and cos terms are hard to read.
+- **Time zones:** glin converts values that have a time zone to UTC.
+- **Day and month order:** glin reads `dd/mm` or `mm/dd` from the values. A field above 12 decides. If nothing decides, glin assumes month first, and `train_model` returns a warning. Use ISO `YYYY-MM-DD` to avoid the warning.
+- **Values that do not parse:** They become missing, with a warning.
+- **Bare numbers are never dates.** Years, `20240306`, epoch seconds and IDs stay numeric. Month-only and quarter strings (`Jan`, `Q1 2020`) and version strings (`1.2.3`) stay categorical. If the date matters, convert these values to date strings first.
+- **At predict time:** Send the raw date. A date outside the training range returns an `out_of_range` warning. A date that does not parse returns `unparseable_date`. A month or weekday that training never saw returns `unseen_category`.
+
+### Feature columns: not yet supported
+
+| Data shape | What happens | Why |
 |---|---|---|
-| Dates stored as bare numbers (year, `YYYYMMDD`, epoch seconds) | Treated as ordinary numerics, not dates. | A plain integer column can't be told apart from an ID or a count; convert it to a date string if it is one. |
-| Free text / natural language | Dropped once it exceeds 250 unique values; below that threshold it becomes a set of (almost certainly useless) categorical labels. | glin doesn't do NLP; a text column isn't a set of classes. |
-| Lists / dicts / nested JSON in a cell | Not parsed structurally; treated as an opaque string. | No structured extraction implemented. |
-| Row identifiers (sequential IDs, UUIDs, hashes) | Dropped intentionally — not a gap, this is by design. Only checked above 50 rows. A numeric column is an identifier only if it is more than 95% unique, every value is a whole number and no value repeats; text columns more than 95% unique are dropped too. | IDs carry no predictive signal. |
-| Any dropped column (constant, identifier-like, more than 250 categories, date with no varying part) | Listed in `features_dropped`, and `train_model` returns a `warnings` entry naming the column and the reason (for numeric identifiers with a hint to round or bin the column if it is a real measurement). | So a drop is never silent. |
+| Dates stored as bare numbers (year, `YYYYMMDD`, epoch seconds) | glin treats them as ordinary numbers, not dates. | glin cannot tell a plain integer column from an ID or a count. Convert the column to date strings if it holds dates. |
+| Free text | glin drops the column if it has more than 250 unique values. Below that limit, the text becomes a set of categories that almost certainly have no use. | glin does not do natural language processing. A text column is not a set of classes. |
+| Lists, dicts or nested JSON in a cell | glin does not parse them. It treats the cell as an opaque string. | No structured extraction exists. |
+| Row identifiers (sequential IDs, UUIDs, hashes) | glin drops them on purpose. This is not a gap. glin checks them only above 50 rows. A numeric column is an identifier only if it is more than 95% unique, every value is a whole number and no value repeats. glin also drops text columns that are more than 95% unique. | IDs carry no predictive signal. |
+| Any dropped column (constant, identifier-like, more than 250 categories, or a date with no varying part) | `features_dropped` lists the column. `train_model` also returns a `warnings` entry with the column name and the reason. For numeric identifiers, the entry suggests that you round or bin the column if it is a real measurement. | A drop is never silent. |
 
-**Target leakage check:**
+### Target leakage check
 
-After preprocessing, `train_model` (and `glin train`) looks for single feature columns that on their own (near-)perfectly separate the target — the usual sign that the target was derived from that column (a threshold, band or category mapping), so the model just reads it back. Flagged columns appear in `warnings` as `Possible target leakage: ...` with the evidence (a numeric threshold/band such as `> 62.5 -> 'yes'`, or a category mapping such as `{p, q} -> 'ok'`) and a suggestion to drop the column and retrain if it would not be known at prediction time. It is only ever a warning: training proceeds, and the result also has `leakage_suspects` in the Python bundle. The `build_classifier`, `prepare_csv_for_training` and tuning prompts tell the agent to review these warnings with the user.
+After preprocessing, `train_model` and `glin train` look for single feature columns that separate the target almost perfectly on their own. This is the usual sign that someone derived the target from that column with a threshold, a band or a category mapping. The model then only reads the target back.
 
-- **Method:** each feature gets a single-feature stump scored by balanced accuracy on the training rows (the holdout split is excluded): a decision tree with at most `n_classes + 1` leaves for numerics (a threshold, or a band for two cut points), or a category → majority-class map for categoricals. A feature is flagged at balanced accuracy ≥ 0.99, which also implies one-vs-rest AUC ≥ 0.99 for a binary target. A strong but imperfect predictor does not trigger it.
-- **Judged as the model sees it:** percent, currency and suppression-coded columns are checked after numeric coercion, and missingness counts (a column that is blank exactly when the target is positive is flagged as `missing -> ...`). Date columns are checked via their derived terms but reported under the raw column (`'signup' (via derived term 'signup__days_since_start')`).
-- **Guards against chance and memorisation:** each leaf/category needs at least 5 rows (more on bigger data); a categorical must have ≥ 90% of rows in such well-supported categories, so near-unique or high-cardinality columns cannot "separate" the target by memorising it; classes with fewer than 10 rows are left out of the check; and it is skipped below 30 rows. Cost is a few ms per column, with at most 20,000 rows sampled (about 2 s for 500 columns).
-- At most 10 columns are reported, best first.
+glin flags such a column in `warnings` as `Possible target leakage: ...`. The warning shows the evidence: a numeric threshold or band such as `> 62.5 -> 'yes'`, or a category mapping such as `{p, q} -> 'ok'`. It suggests that you drop the column and retrain if the column is not known at prediction time. The check is only a warning. Training continues. The Python result also has `leakage_suspects`. The `build_classifier`, `prepare_csv_for_training` and tuning prompts tell the agent to review these warnings with the user.
 
-**Target column requirements:**
+- **Method:** glin fits a single-feature stump for each feature. It scores the stump by balanced accuracy on the training rows. The holdout rows are not used. For numeric features, the stump is a decision tree with at most `n_classes + 1` leaves (one threshold, or a band with two cut points). For categorical features, the stump maps each category to its majority class. glin flags a feature at balanced accuracy of 0.99 or more. For a binary target, this also means a one-vs-rest AUC of 0.99 or more. A strong but imperfect predictor does not trigger the check.
+- **As the model sees it:** glin checks percent, currency and suppression-coded columns after numeric conversion. Missingness counts. A column that is blank exactly when the target is positive is flagged as `missing -> ...`. glin checks date columns through their derived terms and reports them under the raw column, for example `'signup' (via derived term 'signup__days_since_start')`.
+- **Guards against chance and memorization:**
+  - Each leaf or category needs at least 5 rows (more on bigger data).
+  - A categorical column must have at least 90% of its rows in such well-supported categories. A near-unique or high-cardinality column therefore cannot "separate" the target by memorization.
+  - glin leaves out classes with fewer than 10 rows.
+  - glin skips the check below 30 rows.
+  - The cost is a few milliseconds for each column. glin samples at most 20,000 rows. 500 columns take about 2 seconds.
+- glin reports at most 10 columns, the best first.
 
-- At least 2 distinct non-null values (binary or multiclass) — a single-class target is a hard error.
-- Rows with a missing target value are dropped automatically (with a warning); the rest are unaffected.
-- A numeric target with many distinct values (>20) triggers a warning that it looks like a regression target — `glin` trains classifiers, not regressors, so each value would be its own unrelated class. Band it into a few classes (quantiles or domain thresholds) or pick another target.
-- A numeric target with 3–20 distinct values (e.g. a score or ordinal level) triggers a warning that the multiclass model ignores the values' order; consider fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts carry the same guidance.
-- Full regression (upstream `ExplainableBoostingRegressor`) is planned separately and not yet supported.
+### Target column requirements
+
+- The target needs at least 2 distinct non-null values (binary or multiclass). A single-class target is a hard error.
+- glin drops rows with a missing target value and returns a warning. The other rows are not affected.
+- A numeric target with more than 20 distinct values triggers a warning that it looks like a regression target. glin trains classifiers, not regressors, so each value would become its own unrelated class. Band the target into a few classes (quantiles or domain thresholds), or pick another target.
+- A numeric target with 3 to 20 distinct values (for example a score or an ordinal level) triggers a warning. The multiclass model ignores the order of the values. Use fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts give the same guidance.
+- Full regression (the upstream `ExplainableBoostingRegressor`) is planned separately. It is not yet supported.
+
+## Known issues
+
+- **`explain_model` shape ranges:** For continuous features, the `range` text in `shape` shows the error bars of the score. It does not show the values of the feature. The scores and the importances are correct. See [#38](https://github.com/AkashChatterjee/glin/issues/38).
 
 ## Releasing (maintainers)
 
-**Releases are published to PyPI only by the `Publish to PyPI` GitHub Actions workflow ([.github/workflows/publish.yml](.github/workflows/publish.yml)). Nobody uploads from a local machine — no `twine upload`, no `uv publish`, no personal API tokens.** To release, push a tag of the form `vX.Y.Z`:
+**Only the `Publish to PyPI` GitHub Actions workflow ([.github/workflows/publish.yml](.github/workflows/publish.yml)) publishes releases to PyPI. Nobody uploads from a local machine. Do not use `twine upload`, `uv publish` or personal API tokens.** To release, push a tag of the form `vX.Y.Z`:
 
 ```bash
 git tag v0.1.3
 git push origin v0.1.3
 ```
 
-The workflow runs the tests on Python 3.10 and 3.12, builds the sdist and wheel, checks that the artifacts carry the tag's version, and publishes them to PyPI as `glin-ml` at that exact version. The package version is derived from the git tag by `hatch-vcs` (`pyproject.toml` has no hardcoded version), so there is nothing to bump or commit before a release. Untagged local builds get a dev version such as `0.1.4.dev1+g3fa91a0`, and a source tree with no git metadata reports `0.0.0`. `glin.__version__` reads the installed package metadata. Tags that don't match `vX.Y.Z` are ignored. PyPI rejects re-uploading a version number, so a bad release can only be fixed by tagging a new version.
+The workflow runs the tests on Python 3.10 and 3.12. It builds the sdist and the wheel, and checks that both carry the version of the tag. Then it publishes them to PyPI as `glin-ml` at that exact version.
+
+- `hatch-vcs` derives the package version from the git tag. `pyproject.toml` has no fixed version, so you do not bump or commit anything before a release.
+- An untagged local build gets a dev version such as `0.1.4.dev1+g3fa91a0`. A source tree with no git metadata reports `0.0.0`.
+- `glin.__version__` reads the installed package metadata.
+- The workflow ignores tags that do not match `vX.Y.Z`.
+- PyPI rejects an upload of a version number that already exists. To fix a bad release, tag a new version.
 
 ### One-time setup that makes this the only path
 
-The workflow publishes through PyPI [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC), which is also what keeps local uploads impossible:
+The workflow publishes through PyPI [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC). This also makes local uploads impossible.
 
-1. **PyPI → the `glin-ml` project → Publishing:** add a trusted publisher for owner `AkashChatterjee`, repository `glin`, workflow `publish.yml`, environment `pypi`.
-2. **PyPI → Account settings → API tokens:** delete every existing API token that can upload `glin-ml`, and don't create new ones. With no tokens and 2FA on, the only credential that can publish is the workflow's short-lived OIDC identity. Also review the project's Collaborators and remove anyone who doesn't need upload rights.
-3. **GitHub → Settings → Rules → Rulesets:** add a tag ruleset for `v*` that restricts who can create tags (and blocks deleting or moving them), since creating a matching tag is what triggers a release.
-4. **GitHub → Settings → Environments → `pypi`:** add required reviewers, so every release needs a manual approval before the upload step runs.
+1. **PyPI → the `glin-ml` project → Publishing:** add a trusted publisher for owner `AkashChatterjee`, repository `glin`, workflow `publish.yml` and environment `pypi`.
+2. **PyPI → Account settings → API tokens:** delete every API token that can upload `glin-ml`. Do not create new tokens. With no tokens and 2FA on, the only credential that can publish is the short-lived OIDC identity of the workflow. Also review the collaborators of the project. Remove anyone who does not need upload rights.
+3. **GitHub → Settings → Rules → Rulesets:** add a tag ruleset for `v*`. Restrict who can create tags, and block deleting or moving them. A new matching tag starts a release.
+4. **GitHub → Settings → Environments → `pypi`:** add required reviewers. Every release then needs a manual approval before the upload step runs.
 
 ### Checking a release
 
-To sanity-check a build without publishing anything, `uv build` locally and inspect `dist/` — but never upload it. After a release, confirm the public package works with a clean install:
+To check a build without publishing it, run `uv build` locally and inspect `dist/`. Never upload it. After a release, confirm that the public package works with a clean install:
 
 ```bash
 uv tool install glin-ml

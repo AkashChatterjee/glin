@@ -63,7 +63,16 @@
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const markdown = await res.text();
         contentEl.innerHTML = marked.parse(markdown);
+        // marked adds no heading ids, so build GitHub-style ones for the contents links.
+        const seen = {};
+        contentEl.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((h) => {
+          const base = h.textContent.trim().toLowerCase()
+            .replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+          const n = seen[base] = (seen[base] ?? -1) + 1;
+          h.id = n ? base + '-' + n : base;
+        });
         contentEl.hidden = false;
+        if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
         statusEl.remove();
       } catch (err) {
         statusEl.textContent = 'Could not load README.md: ' + err.message +
