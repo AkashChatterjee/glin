@@ -2,7 +2,9 @@
 
 CLI tool and Python library that equips AI agents with an instant, statistical "gut feeling" (System 1 thinking).
 
-`glin` trains an [Explainable Boosting Machine](https://interpret.ml/) on a CSV, then exposes it to LLM agents over [MCP](https://modelcontextprotocol.io/) — locally over stdio, or remotely over MCP's standard `streamable-http` transport. Every prediction comes with an exact, zero-approximation breakdown of which features drove it, straight from the model's own additive structure (no SHAP/LIME approximation).
+`glin` trains an [Explainable Boosting Machine](https://interpret.ml/) on a CSV, then exposes it to LLM agents over [MCP](https://modelcontextprotocol.io/) — locally over stdio. Every prediction comes with an exact, zero-approximation breakdown of which features drove it, straight from the model's own additive structure (no SHAP/LIME approximation).
+
+> glin is local-only (stdio); there is no remote/HTTP mode. v0.1.3 is the last release that had one.
 
 ## Install
 
@@ -60,23 +62,10 @@ Add to your MCP client's config (e.g. `claude_desktop_config.json`):
   "mcpServers": {
     "glin": {
       "command": "glin",
-      "args": ["serve", "--mode", "stdio"]
+      "args": ["serve"]
     }
   }
 }
-```
-
-## Deploy it remotely (e.g. one EC2 box, any MCP-aware agent)
-
-```bash
-docker build -t glin .
-docker run -p 8000:8000 -v ~/.glin:/root/.glin glin
-```
-
-Then point any MCP client at the standard streamable-http endpoint:
-
-```bash
-claude mcp add --transport http glin http://<host>:8000/mcp
 ```
 
 ## Tools exposed over MCP
@@ -95,10 +84,10 @@ Every tool carries MCP annotations (title, `readOnlyHint`, `destructiveHint`): a
 `train_model(csv_path=...)` only reads a regular file ending in `.csv` whose fully resolved path (symlinks and `..` followed) lies inside an allowed directory. Directories, devices, other extensions, missing files, traversal and symlinks pointing outside are rejected with an error that never includes file contents. By default the allowed directories are the server's home and working directories; override with a repeatable flag:
 
 ```bash
-glin serve --mode http --allow-dir /data/csvs --allow-dir /srv/uploads
+glin serve --allow-dir /data/csvs --allow-dir /srv/uploads
 ```
 
-In Docker, mount your data and pass `--allow-dir` (the default home is `/root`). `csv_content` is unaffected.
+`csv_content` is unaffected. In your MCP client config, add the flags to `args`, e.g. `["serve", "--allow-dir", "/data/csvs"]`.
 
 ## Letting an agent tune the model
 
@@ -168,7 +157,7 @@ git tag v0.1.3
 git push origin v0.1.3
 ```
 
-The workflow runs the tests on Python 3.10 and 3.12, builds the sdist and wheel, checks that the artifacts carry the tag's version, and publishes them to PyPI as `glin-ml` at that exact version. The package version is derived from the git tag by `hatch-vcs` (`pyproject.toml` has no hardcoded version), so there is nothing to bump or commit before a release. Untagged local builds get a dev version such as `0.1.4.dev1+g3fa91a0`, and a source tree with no git metadata (like the Docker build) reports `0.0.0`. `glin.__version__` reads the installed package metadata. Tags that don't match `vX.Y.Z` are ignored. PyPI rejects re-uploading a version number, so a bad release can only be fixed by tagging a new version.
+The workflow runs the tests on Python 3.10 and 3.12, builds the sdist and wheel, checks that the artifacts carry the tag's version, and publishes them to PyPI as `glin-ml` at that exact version. The package version is derived from the git tag by `hatch-vcs` (`pyproject.toml` has no hardcoded version), so there is nothing to bump or commit before a release. Untagged local builds get a dev version such as `0.1.4.dev1+g3fa91a0`, and a source tree with no git metadata reports `0.0.0`. `glin.__version__` reads the installed package metadata. Tags that don't match `vX.Y.Z` are ignored. PyPI rejects re-uploading a version number, so a bad release can only be fixed by tagging a new version.
 
 ### One-time setup that makes this the only path
 

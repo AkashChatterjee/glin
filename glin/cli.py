@@ -142,9 +142,6 @@ def delete(name: str, yes: bool) -> None:
 
 
 @main.command()
-@click.option("--mode", type=click.Choice(["stdio", "http"]), default="stdio")
-@click.option("--host", default="0.0.0.0")
-@click.option("--port", default=8000, type=int)
 @click.option(
     "--allow-dir",
     "allow_dirs",
@@ -153,13 +150,9 @@ def delete(name: str, yes: bool) -> None:
     help="Directory train_model(csv_path=...) may read from; repeatable. "
     "Defaults to the home and current directories.",
 )
-def serve(mode: str, host: str, port: int, allow_dirs: tuple[Path, ...]) -> None:
-    """Run the glin MCP server (stdio for local clients, http for remote agents)."""
-    allowed = list(allow_dirs) or None
-    if mode == "stdio":
-        server.run_stdio(allowed_dirs=allowed)
-    else:
-        server.run_http(host=host, port=port, allowed_dirs=allowed)
+def serve(allow_dirs: tuple[Path, ...]) -> None:
+    """Run the glin MCP server over stdio, for local MCP clients."""
+    server.run_stdio(allowed_dirs=list(allow_dirs) or None)
 
 
 if __name__ == "__main__":
