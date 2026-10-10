@@ -129,6 +129,7 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 | Numeric (int/float), including `NaN` | Passed through as-is; EBM natively bins missing values into their own split. |
 | Dirty numeric strings (blanks, e.g. `" "` for a new customer's total charges) | Coerced to `float64` if ≥80% of non-null values parse as numbers; unparseable cells become `NaN`. |
 | Categorical strings, any cardinality up to 250 unique values | Standardized (lowercased, stripped) and one-hot-style binned by EBM; missing/unseen values map to a `__missing__` sentinel. |
+| Currency / thousands-separated strings (`$1,234.56`, `£1,234`, `€1.234,56`, `(1,234)`) | Currency symbols and whitespace are stripped, then the column is coerced as above. A decimal comma is used only when the column has unambiguous European values (`1.234,56`, `12,5`, `1.234.567`); a bare `1,234` is read as a thousands group. Columns mixing both conventions are parsed as US and a warning is returned. |
 | Boolean columns | Treated as a 0/1 continuous numeric feature. |
 
 **Feature columns — not yet supported** (each is flagged by `glin train`'s validator when detected):
@@ -137,7 +138,6 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 |---|---|---|
 | Dates / timestamps | No date features are extracted. The column is either dropped (if high-cardinality) or kept as a meaningless categorical label — no time-based signal survives either way. | Cut from V1 scope; a real dataset need should drive adding cyclical date-feature extraction. |
 | Free text / natural language | Dropped once it exceeds 250 unique values; below that threshold it becomes a set of (almost certainly useless) categorical labels. | glin doesn't do NLP; a text column isn't a set of classes. |
-| Currency symbols / thousands separators (`$`, `€`, `£`, `,`) | Not stripped. `"$1,234.56"` fails the ≥80% numeric-parse threshold and falls back to categorical (i.e. garbage). Clean these before training. | Cut from V1 scope under an "assume a healthy dataset" simplification. |
 | Lists / dicts / nested JSON in a cell | Not parsed structurally; treated as an opaque string. | No structured extraction implemented. |
 | Row identifiers (sequential IDs, UUIDs, hashes) | Dropped intentionally — not a gap, this is by design. | IDs carry no predictive signal. |
 
