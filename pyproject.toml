@@ -1,6 +1,6 @@
 [project]
 name = "glin-ml"
-version = "0.1.2"
+dynamic = ["version"]
 description = "Instant, exactly-explainable statistical classifiers for AI agents, over MCP."
 readme = "README.md"
 license = { text = "MIT" }
@@ -43,8 +43,15 @@ dev = [
 glin = "glin.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# The version comes from the latest git tag (v0.1.3 -> 0.1.3); there is nothing
+# to bump in this file. Untagged commits get a dev version, and a source tree
+# with no git metadata (e.g. the Docker build context) falls back to 0.0.0.
+[tool.hatch.version]
+source = "vcs"
+raw-options = { fallback_version = "0.0.0" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["glin"]
