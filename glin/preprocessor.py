@@ -102,6 +102,12 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             for col in categorical_cols
         }
 
+        self.numeric_ranges_ = {}
+        for col in numeric_cols:
+            values = pd.to_numeric(self._strip_numeric(X[col]), errors="coerce").dropna()
+            if len(values):
+                self.numeric_ranges_[col] = (float(values.min()), float(values.max()))
+
         self.feature_types_ = {col: CONTINUOUS for col in numeric_cols}
         self.feature_types_.update({col: NOMINAL for col in categorical_cols})
 
@@ -132,6 +138,51 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                 out[col] = self.missing_token
 
         return out[self.output_columns_]
+
+    def check_inputs(self, record: dict) -> dict[str, list]:
+        """Flag a single inference record's inputs the model has not seen.
+
+        ``warnings`` lists unseen categories and numerics outside the training
+        range; ``missing_features`` lists absent/blank inputs, which are valid
+        (the model bins them) and so reported separately.
+        """
+        check_is_fitted(self, "output_columns_")
+        warnings: list[dict] = []
+        missing: list[str] = []
+        frame = pd.DataFrame([record])
+
+        for col in self.numeric_columns_:
+            if col not in frame.columns:
+                missing.append(col)
+                continue
+            value = pd.to_numeric(self._strip_numeric(frame[col]), errors="coerce").iloc[0]
+            if pd.isna(value):
+                missing.append(col)
+                continue
+            low, high = getattr(self, "numeric_ranges_", {}).get(col, (-np.inf, np.inf))
+            if value < low or value > high:
+                warnings.append(
+                    {
+                        "feature": col,
+                        "value": record[col],
+                        "issue": "out_of_range",
+                        "training_range": [low, high],
+                    }
+                )
+
+        for col in self.categorical_columns_:
+            if col not in frame.columns:
+                missing.append(col)
+                continue
+            cleaned = self._clean_categorical(frame[col]).iloc[0]
+            if cleaned == self.missing_token:
+                missing.append(col)
+            elif cleaned not in self.categorical_vocab_[col]:
+                warnings.append(
+                    {"feature": col, "value": record[col], "issue": "unseen_category"}
+                )
+
+        return {"warnings": warnings, "missing_features": missing}
 
     def get_feature_types(self) -> list[str]:
         """Ordered feature_types list matching output_columns_, for EBM's

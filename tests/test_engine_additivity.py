@@ -225,3 +225,28 @@ def test_global_importance_works_for_multiclass_without_shapes():
     )
     out = engine.global_importance(bundle)
     assert out["features"] and all("shape" not in t for t in out["terms"])
+
+
+def test_predict_warns_on_unseen_category_and_out_of_range_numeric():
+    df = _synthetic_binary_df()
+    bundle = engine.train_model(df, "label", model_name="warn_test")
+
+    ok = engine.explain_record(bundle, {"num1": 0.0, "num2": 0.0, "cat1": "a"})
+    assert ok["warnings"] == []
+    assert ok["missing_features"] == []
+
+    out = engine.explain_record(bundle, {"num1": 1000.0, "num2": 0.0, "cat1": "zzz"})
+    by_feature = {w["feature"]: w for w in out["warnings"]}
+    assert by_feature["num1"]["issue"] == "out_of_range"
+    assert by_feature["num1"]["value"] == 1000.0
+    assert by_feature["cat1"]["issue"] == "unseen_category"
+    assert by_feature["cat1"]["value"] == "zzz"
+
+
+def test_predict_reports_missing_inputs_separately_from_warnings():
+    df = _synthetic_binary_df()
+    bundle = engine.train_model(df, "label", model_name="missing_test")
+
+    result = engine.explain_record(bundle, {"num1": None, "cat1": ""})
+    assert result["warnings"] == []
+    assert set(result["missing_features"]) == {"num1", "num2", "cat1"}
