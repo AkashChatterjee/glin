@@ -56,6 +56,22 @@ def test_continuous_looking_target_is_a_warning():
     result = validate_dataset(df, "price")
     assert result.is_valid  # still trainable, just flagged
     assert any("regressor" in i.message for i in result.warnings)
+    assert any("band the target" in i.message for i in result.warnings)
+
+
+def test_ordinal_looking_numeric_target_warns_order_is_ignored():
+    df = _base_df()
+    df["level"] = np.random.RandomState(2).randint(1, 6, size=len(df))
+    result = validate_dataset(df, "level")
+    assert result.is_valid
+    assert any("ignores their order" in i.message for i in result.warnings)
+
+
+def test_binary_numeric_target_has_no_target_shape_warning():
+    df = _base_df()
+    df["flag"] = np.random.RandomState(3).randint(0, 2, size=len(df))
+    result = validate_dataset(df, "flag")
+    assert not any("flag" in i.message for i in result.warnings)
 
 
 def test_datetime_column_is_a_warning():
