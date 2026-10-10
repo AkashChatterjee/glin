@@ -290,7 +290,8 @@ def test_additivity_and_named_terms_with_date_features():
     for i in range(15):
         explanation = engine.explain_record(bundle, raw.iloc[i].to_dict(), top_n=50)
         assert explanation["additivity_verified"]
-        assert abs(explanation["reconstructed_probability"] - proba[i][1]) < 1e-3
+        reconstructed = explanation["reconstructed_probability"][str(bundle["target_classes"][1])]
+        assert abs(reconstructed - proba[i][1]) < 1e-3
         features = {c["feature"] for c in explanation["contributions"]}
         assert any(f.startswith("signup_date__") for f in features)
         assert "signup_date" not in features

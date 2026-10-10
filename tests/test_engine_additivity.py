@@ -49,7 +49,23 @@ def test_binary_additivity_matches_predict_proba():
         record = df.drop(columns=["label"]).iloc[i].to_dict()
         explanation = engine.explain_record(bundle, record)
         assert explanation["additivity_verified"]
-        assert abs(explanation["reconstructed_probability"] - proba[i][1]) < 1e-3
+        for k, label in enumerate(bundle["target_classes"]):
+            assert abs(explanation["reconstructed_probability"][str(label)] - proba[i][k]) < 1e-3
+
+
+def test_binary_audit_names_the_class_it_describes():
+    df = _synthetic_binary_df()
+    bundle = engine.train_model(df, "label", model_name="binary_labels", hyperparameters={"interactions": 3})
+    classes = [str(c) for c in bundle["target_classes"]]
+
+    explanation = engine.explain_record(bundle, df.drop(columns=["label"]).iloc[0].to_dict())
+    assert explanation["score_class"] == classes[1]
+    assert isinstance(explanation["base_logit"], float)
+    assert "base_rate" not in explanation
+    for field in ("probabilities", "reconstructed_probability", "model_probability"):
+        assert set(explanation[field]) == set(classes)
+        assert sum(explanation[field].values()) == pytest.approx(1.0, abs=1e-6)
+    assert explanation["model_probability"] == explanation["probabilities"]
 
 
 def test_binary_direction_labels_match_score_sign():
@@ -77,6 +93,8 @@ def test_multiclass_additivity_matches_predict_proba_via_softmax():
         record = df.drop(columns=["label"]).iloc[i].to_dict()
         explanation = engine.explain_record(bundle, record)
         assert explanation["additivity_verified"]
+        assert "base_rate" not in explanation and "score_class" not in explanation
+        assert set(explanation["base_logit"]) == {str(c) for c in bundle["target_classes"]}
         reconstructed = explanation["reconstructed_probability"]
         for k, class_label in enumerate(bundle["target_classes"]):
             assert abs(reconstructed[str(class_label)] - proba[i][k]) < 1e-3

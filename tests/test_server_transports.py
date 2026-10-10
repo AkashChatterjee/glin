@@ -94,7 +94,9 @@ async def test_predict_returns_prediction_and_verified_additivity(models_root):
     assert result["predicted_class"] in ("Yes", "No")
     assert "probabilities" in result
     assert result["additivity_verified"] is True
-    assert "base_rate" in result
+    assert "base_logit" in result and "base_rate" not in result
+    assert result["score_class"] in result["probabilities"]
+    assert set(result["model_probability"]) == set(result["probabilities"])
     assert isinstance(result["contributions"], list)
 
 
