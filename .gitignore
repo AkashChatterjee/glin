@@ -8,6 +8,7 @@ dist/
 
 # Local Development
 .localdev/
+.claude/worktrees/
 
 # Generated at Pages build time (see .github/workflows/deploy.yml); the
 # source of truth is the root README.md.
