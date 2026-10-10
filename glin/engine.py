@@ -26,14 +26,24 @@ import joblib
 import numpy as np
 import pandas as pd
 from interpret.glassbox import ExplainableBoostingClassifier
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, log_loss, roc_auc_score
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
+from glin.hyperparameters import HYPERPARAMETERS, resolve_hyperparameters
 from glin.preprocessor import EBMTabularPreprocessor
-from glin.validation import validate_dataset
+from glin.validation import MIN_ROWS, validate_dataset
 
 BUNDLE_FILENAME = "bundle.joblib"
 METADATA_FILENAME = "metadata.json"
 DEFAULT_MODELS_ROOT = Path.home() / ".glin" / "models"
+
+# The holdout split is seeded independently of the model's random_state so
+# two trials that differ only in hyperparameters (or only in random_state)
+# are always scored on the exact same held-out rows -- otherwise a metric
+# delta could just be a different draw of the split.
+HOLDOUT_SPLIT_SEED = 0
+MIN_HOLDOUT_ROWS = 10
 
 
 def _to_native(value: Any) -> Any:
@@ -53,14 +63,48 @@ def _softmax(x: np.ndarray) -> np.ndarray:
     return exp / exp.sum()
 
 
+def _evaluate(
+    model: ExplainableBoostingClassifier,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    n_classes: int,
+    prior: np.ndarray,
+) -> dict[str, Any]:
+    """Out-of-sample quality of ``model`` on (X, y). ``log_loss`` is the
+    headline number (it's what the EBM optimizes and it scores the
+    probabilities, not just the argmax); ``baseline_log_loss`` is what
+    always predicting the training class frequencies would score, so
+    ``log_loss`` below it means the model learned something. AUC is None
+    when the holdout is missing a class and AUC is undefined."""
+    proba = model.predict_proba(X)
+    labels = list(range(n_classes))
+    pred = np.argmax(proba, axis=1)
+
+    try:
+        auc = (
+            roc_auc_score(y, proba[:, 1])
+            if n_classes == 2
+            else roc_auc_score(y, proba, multi_class="ovr", labels=labels)
+        )
+    except ValueError:
+        auc = None
+
+    return {
+        "log_loss": float(log_loss(y, proba, labels=labels)),
+        "baseline_log_loss": float(log_loss(y, np.tile(prior, (len(y), 1)), labels=labels)),
+        "accuracy": float(accuracy_score(y, pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y, pred)),
+        "roc_auc": None if auc is None else float(auc),
+    }
+
+
 def train_model(
     df: pd.DataFrame,
     target_column: str,
     *,
     model_name: str,
-    max_bins: int = 256,
-    interactions: int = 10,
-    random_state: int = 42,
+    hyperparameters: Optional[dict[str, Any]] = None,
+    holdout_fraction: float = 0.0,
     on_progress: Optional[Callable[[float, float], None]] = None,
     progress_interval: float = 1.0,
 ) -> dict[str, Any]:
@@ -70,6 +114,18 @@ def train_model(
     interaction terms for multiclass models). Raises ValueError if the
     dataset fails a hard validation rule (see glin.validation); returns any
     soft warnings alongside the trained bundle.
+
+    ``hyperparameters`` overrides any subset of glin.hyperparameters.HYPERPARAMETERS
+    (validated; unspecified ones keep their defaults).
+
+    If ``holdout_fraction`` > 0, that share of rows (stratified by class
+    when possible) is set aside BEFORE the preprocessor is fitted, the
+    model is trained only on the rest, and the returned bundle carries
+    ``evaluation``: out-of-sample metrics for exactly the model that gets
+    saved. This is what makes hyperparameter tuning possible -- EBM's own
+    internal validation split is used for early stopping and so isn't an
+    unbiased score. With 0 the model trains on every row and
+    ``evaluation`` is None.
 
     ``on_progress``, if given, is invoked roughly every ``progress_interval``
     seconds as ``on_progress(best_log_loss_so_far, elapsed_seconds)``. EBM
@@ -85,6 +141,10 @@ def train_model(
     if not validation.is_valid:
         raise ValueError("; ".join(issue.message for issue in validation.errors))
 
+    params = resolve_hyperparameters(hyperparameters)
+    if not 0.0 <= holdout_fraction <= 0.5:
+        raise ValueError(f"holdout_fraction must be between 0 and 0.5, got {holdout_fraction}")
+
     df = df.dropna(subset=[target_column])
     X_raw = df.drop(columns=[target_column])
     y_raw = df[target_column]
@@ -92,6 +152,27 @@ def train_model(
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(y_raw)
     target_classes = [_to_native(c) for c in label_encoder.classes_]
+    n_classes = len(target_classes)
+
+    X_holdout_raw = y_holdout = None
+    if holdout_fraction > 0:
+        n_holdout = int(round(len(df) * holdout_fraction))
+        if n_holdout < MIN_HOLDOUT_ROWS or len(df) - n_holdout < MIN_ROWS:
+            raise ValueError(
+                f"holdout_fraction={holdout_fraction} on {len(df)} rows leaves "
+                f"{n_holdout} holdout / {len(df) - n_holdout} training rows; need at "
+                f"least {MIN_HOLDOUT_ROWS} and {MIN_ROWS} respectively -- use a "
+                "different fraction or pass holdout_fraction=0 to train on all rows"
+            )
+        # Stratify only when every class can appear on both sides of the split.
+        can_stratify = np.bincount(y).min() >= 2 and n_holdout >= n_classes
+        X_raw, X_holdout_raw, y, y_holdout = train_test_split(
+            X_raw,
+            y,
+            test_size=holdout_fraction,
+            random_state=HOLDOUT_SPLIT_SEED,
+            stratify=y if can_stratify else None,
+        )
 
     preprocessor = EBMTabularPreprocessor()
     X = preprocessor.fit_transform(X_raw)
@@ -133,11 +214,10 @@ def train_model(
     model = ExplainableBoostingClassifier(
         feature_names=list(X.columns),
         feature_types=preprocessor.get_feature_types(),
-        max_bins=max_bins,
-        interactions=interactions,
-        random_state=random_state,
         callback=ebm_callback,
+        **params,
     )
+    fit_started = time.monotonic()
     try:
         with warnings.catch_warnings():
             # interpret-core warns that missing values won't render in its own
@@ -153,6 +233,18 @@ def train_model(
             on_progress(best_so_far.value, time.monotonic() - start_time)
         if manager is not None:
             manager.shutdown()
+    training_seconds = time.monotonic() - fit_started
+
+    evaluation = None
+    if y_holdout is not None:
+        prior = np.bincount(y, minlength=n_classes) / len(y)
+        evaluation = _evaluate(
+            model, preprocessor.transform(X_holdout_raw), y_holdout, n_classes, prior
+        )
+        evaluation["train_log_loss"] = float(
+            log_loss(y, model.predict_proba(X), labels=list(range(n_classes)))
+        )
+        evaluation["holdout_rows"] = len(y_holdout)
 
     return {
         "model_name": model_name,
@@ -160,6 +252,11 @@ def train_model(
         "preprocessor": preprocessor,
         "model": model,
         "target_classes": target_classes,
+        "hyperparameters": params,
+        "holdout_fraction": holdout_fraction,
+        "evaluation": evaluation,
+        "training_rows": len(y),
+        "training_seconds": training_seconds,
         "warnings": [issue.message for issue in validation.warnings],
     }
 
@@ -196,10 +293,12 @@ def save_bundle(bundle: dict[str, Any], models_root: Path) -> Path:
         },
         "dropped_columns": preprocessor.dropped_columns_,
         "hyperparameters": {
-            "max_bins": _to_native(model.max_bins),
-            "interactions": _to_native(model.interactions),
-            "random_state": _to_native(model.random_state),
+            name: _to_native(getattr(model, name)) for name in HYPERPARAMETERS
         },
+        "holdout_fraction": bundle.get("holdout_fraction", 0.0),
+        "evaluation": bundle.get("evaluation"),
+        "training_rows": bundle.get("training_rows"),
+        "training_seconds": bundle.get("training_seconds"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     (model_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2))

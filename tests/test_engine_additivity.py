@@ -40,7 +40,7 @@ def _synthetic_multiclass_df(n=500, seed=0) -> pd.DataFrame:
 
 def test_binary_additivity_matches_predict_proba():
     df = _synthetic_binary_df()
-    bundle = engine.train_model(df, "label", model_name="binary_test", interactions=3)
+    bundle = engine.train_model(df, "label", model_name="binary_test", hyperparameters={"interactions": 3})
 
     X = bundle["preprocessor"].transform(df.drop(columns=["label"]))
     proba = bundle["model"].predict_proba(X)
@@ -54,7 +54,7 @@ def test_binary_additivity_matches_predict_proba():
 
 def test_binary_direction_labels_match_score_sign():
     df = _synthetic_binary_df()
-    bundle = engine.train_model(df, "label", model_name="binary_direction_test", interactions=3)
+    bundle = engine.train_model(df, "label", model_name="binary_direction_test", hyperparameters={"interactions": 3})
     target_classes = bundle["target_classes"]
 
     record = df.drop(columns=["label"]).iloc[0].to_dict()
@@ -68,7 +68,7 @@ def test_binary_direction_labels_match_score_sign():
 
 def test_multiclass_additivity_matches_predict_proba_via_softmax():
     df = _synthetic_multiclass_df()
-    bundle = engine.train_model(df, "label", model_name="multiclass_test", interactions=0)
+    bundle = engine.train_model(df, "label", model_name="multiclass_test", hyperparameters={"interactions": 0})
 
     X = bundle["preprocessor"].transform(df.drop(columns=["label"]))
     proba = bundle["model"].predict_proba(X)
@@ -84,7 +84,7 @@ def test_multiclass_additivity_matches_predict_proba_via_softmax():
 
 def test_predict_top_n_truncates_contributions():
     df = _synthetic_binary_df()
-    bundle = engine.train_model(df, "label", model_name="topn_test", interactions=3)
+    bundle = engine.train_model(df, "label", model_name="topn_test", hyperparameters={"interactions": 3})
     record = df.drop(columns=["label"]).iloc[0].to_dict()
     explanation = engine.explain_record(bundle, record, top_n=2)
     assert len(explanation["contributions"]) == 2
@@ -92,7 +92,7 @@ def test_predict_top_n_truncates_contributions():
 
 def test_bundle_round_trip_preserves_predictions(tmp_path):
     df = _synthetic_binary_df()
-    bundle = engine.train_model(df, "label", model_name="roundtrip_test", interactions=3)
+    bundle = engine.train_model(df, "label", model_name="roundtrip_test", hyperparameters={"interactions": 3})
     record = df.drop(columns=["label"]).iloc[0].to_dict()
 
     before = engine.predict_record(bundle, record)
@@ -108,7 +108,7 @@ def test_metadata_json_is_plain_json_serializable(tmp_path):
     import json
 
     df = _synthetic_binary_df()
-    bundle = engine.train_model(df, "label", model_name="metadata_test", interactions=3)
+    bundle = engine.train_model(df, "label", model_name="metadata_test", hyperparameters={"interactions": 3})
     model_dir = engine.save_bundle(bundle, tmp_path)
 
     metadata = engine.load_metadata(model_dir)
@@ -122,3 +122,78 @@ def test_train_model_raises_on_missing_target_column():
     df = _synthetic_binary_df()
     with pytest.raises(ValueError):
         engine.train_model(df, "does_not_exist", model_name="bad_target")
+
+
+def test_holdout_evaluation_scores_the_saved_model_on_unseen_rows():
+    df = _synthetic_binary_df(n=400)
+    bundle = engine.train_model(
+        df, "label", model_name="holdout_test", holdout_fraction=0.25,
+        hyperparameters={"outer_bags": 2},
+    )
+    ev = bundle["evaluation"]
+    assert ev["holdout_rows"] == 100
+    assert bundle["training_rows"] == 300
+    assert ev["log_loss"] < ev["baseline_log_loss"]
+    assert ev["roc_auc"] > 0.9
+    assert set(ev) >= {"accuracy", "balanced_accuracy", "train_log_loss"}
+
+
+def test_holdout_split_is_independent_of_model_seed():
+    df = _synthetic_binary_df(n=400)
+    kwargs = dict(holdout_fraction=0.25)
+    a = engine.train_model(df, "label", model_name="a", hyperparameters={"outer_bags": 2, "random_state": 1}, **kwargs)
+    b = engine.train_model(df, "label", model_name="b", hyperparameters={"outer_bags": 2, "random_state": 2}, **kwargs)
+    # same held-out rows -> same baseline score, even though the models differ
+    assert a["evaluation"]["baseline_log_loss"] == b["evaluation"]["baseline_log_loss"]
+
+
+def test_holdout_evaluation_supports_multiclass():
+    df = _synthetic_multiclass_df(n=500)
+    bundle = engine.train_model(
+        df, "label", model_name="mc_holdout", holdout_fraction=0.2,
+        hyperparameters={"outer_bags": 2},
+    )
+    assert bundle["evaluation"]["roc_auc"] > 0.8
+
+
+def test_no_holdout_means_no_evaluation():
+    bundle = engine.train_model(
+        _synthetic_binary_df(), "label", model_name="no_holdout", hyperparameters={"outer_bags": 2}
+    )
+    assert bundle["evaluation"] is None
+
+
+def test_holdout_too_small_for_dataset_is_rejected():
+    df = _synthetic_binary_df(n=25)
+    with pytest.raises(ValueError, match="holdout"):
+        engine.train_model(df, "label", model_name="too_small", holdout_fraction=0.4)
+
+
+def test_hyperparameter_validation():
+    from glin.hyperparameters import default_hyperparameters, resolve_hyperparameters
+
+    assert resolve_hyperparameters(None) == default_hyperparameters()
+    assert resolve_hyperparameters({"learning_rate": 1 / 10})["learning_rate"] == 0.1
+    for bad in (
+        {"nope": 1},
+        {"max_bins": True},
+        {"max_bins": 10.5},
+        {"max_bins": "64"},
+        {"max_bins": float("inf")},
+        {"learning_rate": 0},
+        {"outer_bags": 0},
+    ):
+        with pytest.raises(ValueError):
+            resolve_hyperparameters(bad)
+
+
+def test_hyperparameters_reach_the_fitted_ebm(tmp_path):
+    bundle = engine.train_model(
+        _synthetic_binary_df(), "label", model_name="hp_applied",
+        hyperparameters={"max_bins": 8, "min_samples_leaf": 20, "outer_bags": 3, "interactions": 0},
+    )
+    model = bundle["model"]
+    assert (model.max_bins, model.min_samples_leaf, model.outer_bags) == (8, 20, 3)
+
+    meta = engine.load_metadata(engine.save_bundle(bundle, tmp_path))
+    assert meta["hyperparameters"]["min_samples_leaf"] == 20

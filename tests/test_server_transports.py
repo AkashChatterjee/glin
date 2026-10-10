@@ -46,6 +46,7 @@ async def test_all_tools_registered(models_root):
         "inspect_model",
         "predict",
         "train_model",
+        "list_hyperparameters",
     }
 
 
@@ -238,6 +239,95 @@ async def test_prepare_csv_for_training_prompt_mentions_target_column(models_roo
 
 
 @pytest.mark.asyncio
+async def test_list_hyperparameters_matches_registry(models_root):
+    from glin.hyperparameters import HYPERPARAMETERS
+
+    mcp = server.build_server(models_root=models_root)
+    _, structured = await mcp.call_tool("list_hyperparameters", {})
+    rows = {r["name"]: r for r in structured["result"]}
+    assert set(rows) == set(HYPERPARAMETERS)
+    assert rows["max_bins"]["default"] == 256
+    assert rows["interactions"]["default"] == 10
+    assert all(r["guidance"] for r in rows.values())
+
+
+@pytest.mark.asyncio
+async def test_train_model_applies_hyperparameters_and_reports_holdout_metrics(models_root):
+    mcp = server.build_server(models_root=models_root)
+    _, result = await mcp.call_tool(
+        "train_model",
+        {
+            "csv_content": _fixture_csv(),
+            "target_column": "churn",
+            "model_name": "tuned_model",
+            "hyperparameters": {"interactions": 0, "max_bins": 16, "outer_bags": 2},
+        },
+    )
+    assert result["hyperparameters"]["interactions"] == 0
+    assert result["hyperparameters"]["max_bins"] == 16
+    assert result["hyperparameters"]["learning_rate"] == 0.015  # untouched default
+    assert result["terms"]["interactions"] == 0
+
+    evaluation = result["evaluation"]
+    assert evaluation["holdout_rows"] == 40  # default holdout_fraction=0.2 of 200
+    assert result["training_rows"] == 160
+    assert 0 < evaluation["log_loss"] < evaluation["baseline_log_loss"]
+
+    # what the agent was told is also what's persisted for list_models/inspect_model
+    meta = engine.load_metadata(models_root / "tuned_model")
+    assert meta["hyperparameters"]["max_bins"] == 16
+    assert meta["evaluation"]["log_loss"] == evaluation["log_loss"]
+
+
+@pytest.mark.asyncio
+async def test_train_model_without_holdout_trains_on_everything(models_root):
+    mcp = server.build_server(models_root=models_root)
+    _, result = await mcp.call_tool(
+        "train_model",
+        {
+            "csv_content": _fixture_csv(),
+            "target_column": "churn",
+            "model_name": "full_data_model",
+            "holdout_fraction": 0,
+            "hyperparameters": {"outer_bags": 2},
+        },
+    )
+    assert result["evaluation"] is None
+    assert result["training_rows"] == 200
+
+
+@pytest.mark.asyncio
+async def test_train_model_rejects_bad_hyperparameters_naming_every_problem(models_root):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    mcp = server.build_server(models_root=models_root)
+    with pytest.raises(ToolError) as exc:
+        await mcp.call_tool(
+            "train_model",
+            {
+                "csv_content": _fixture_csv(),
+                "target_column": "churn",
+                "model_name": "bad_hp",
+                "hyperparameters": {"learning_rate": 5, "no_such_knob": 1, "max_bins": 2.5},
+            },
+        )
+    msg = str(exc.value)
+    assert "learning_rate" in msg and "no_such_knob" in msg and "max_bins" in msg
+    assert not (models_root / "bad_hp").exists()
+
+
+@pytest.mark.asyncio
+async def test_tune_model_hyperparameters_prompt_lists_live_knobs(models_root):
+    mcp = server.build_server(models_root=models_root)
+    assert "tune_model_hyperparameters" in {p.name for p in await mcp.list_prompts()}
+
+    result = await mcp.get_prompt("tune_model_hyperparameters", {"model_name": "churn_v2"})
+    text = result.messages[0].content.text
+    assert "churn_v2" in text
+    assert "min_samples_leaf" in text and "holdout_fraction=0" in text
+
+
+@pytest.mark.asyncio
 async def test_streamable_http_real_mcp_client_round_trip(models_root):
     """End-to-end proof that a genuine MCP client (not a bespoke protocol)
     can connect over the network and call glin's tools — the actual
@@ -268,6 +358,7 @@ async def test_streamable_http_real_mcp_client_round_trip(models_root):
                     "inspect_model",
                     "predict",
                     "train_model",
+                    "list_hyperparameters",
                 }
 
                 result = await session.call_tool(
