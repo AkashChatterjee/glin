@@ -20,7 +20,7 @@ import warnings
 from datetime import datetime, timezone
 from multiprocessing import Manager
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 import joblib
 import numpy as np
@@ -31,7 +31,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
 from glin.hyperparameters import HYPERPARAMETERS, resolve_hyperparameters
-from glin.preprocessor import EBMTabularPreprocessor
+from glin.preprocessor import DEFAULT_SUPPRESSION_CODES, EBMTabularPreprocessor
 from glin.validation import MIN_ROWS, validate_dataset
 
 BUNDLE_FILENAME = "bundle.joblib"
@@ -107,6 +107,7 @@ def train_model(
     holdout_fraction: float = 0.0,
     on_progress: Optional[Callable[[float, float], None]] = None,
     progress_interval: float = 1.0,
+    suppression_codes: Optional[Sequence[str]] = None,
 ) -> dict[str, Any]:
     """Fits EBMTabularPreprocessor on the feature columns and an
     ExplainableBoostingClassifier on the transformed output. Works for
@@ -126,6 +127,9 @@ def train_model(
     internal validation split is used for early stopping and so isn't an
     unbiased score. With 0 the model trains on every row and
     ``evaluation`` is None.
+
+    ``suppression_codes`` overrides which tokens count as missing in numeric
+    columns (default: glin.preprocessor.DEFAULT_SUPPRESSION_CODES).
 
     ``on_progress``, if given, is invoked roughly every ``progress_interval``
     seconds as ``on_progress(best_log_loss_so_far, elapsed_seconds)``. EBM
@@ -174,7 +178,11 @@ def train_model(
             stratify=y if can_stratify else None,
         )
 
-    preprocessor = EBMTabularPreprocessor()
+    preprocessor = EBMTabularPreprocessor(
+        suppression_codes=(
+            DEFAULT_SUPPRESSION_CODES if suppression_codes is None else tuple(suppression_codes)
+        )
+    )
     X = preprocessor.fit_transform(X_raw)
 
     if X.shape[1] == 0:

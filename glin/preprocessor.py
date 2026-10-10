@@ -16,6 +16,7 @@ the first place. See tests/test_preprocessor.py for the exact per-column
 from __future__ import annotations
 
 import re
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -25,13 +26,19 @@ from sklearn.utils.validation import check_is_fitted
 CONTINUOUS = "continuous"
 NOMINAL = "nominal"
 
-_CURRENCY_RE = re.compile(r"[$€£¥₹₩₽₺₪฿\s\u00a0]")
+DEFAULT_SUPPRESSION_CODES = ("SUPP", "NE", "NP", "z")
+
+_SYMBOL_RE = re.compile(r"[$€£¥₹₩₽₺₪฿\s\u00a0]|%(?=\)?\s*$)")
 _PAREN_NEG_RE = re.compile(r"^\((.*)\)$")
 _EU_ONLY_COMMA_RE = re.compile(r"^[-+]?\d*,\d{1,2}$|^[-+]?\d*,\d{4,}$")
 _EU_GROUPED_DOTS_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3}){2,}(,\d+)?$")
 _EU_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3})+,\d+$")
 _US_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3})+\.\d+$")
 _US_GROUPED_COMMAS_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3}){2,}$")
+
+_MAX_UNKNOWN_CODE_TOKENS = 5
+_MAX_UNKNOWN_CODE_LENGTH = 8
+_MIN_UNKNOWN_CODE_REPEATS = 2
 
 
 class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
@@ -42,6 +49,12 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
     single-record inference dict — nothing is re-learned from inference-time
     data, so unseen categories and structurally missing columns degrade
     gracefully instead of raising.
+
+    In numeric columns, a trailing ``%`` is stripped (the value stays in
+    percentage points: ``44.98%`` -> 44.98) and ``suppression_codes`` (matched
+    case-insensitively, ignoring surrounding whitespace) become missing.
+    Categorical columns are left untouched, so a code like ``NE`` is only
+    treated as missing where the rest of the column is numeric.
     """
 
     def __init__(
@@ -51,12 +64,14 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         numeric_coerce_threshold: float = 0.80,
         missing_token: str = "__missing__",
         min_rows_for_id_check: int = 50,
+        suppression_codes: Sequence[str] = DEFAULT_SUPPRESSION_CODES,
     ):
         self.id_column_threshold = id_column_threshold
         self.max_categorical_cardinality = max_categorical_cardinality
         self.numeric_coerce_threshold = numeric_coerce_threshold
         self.missing_token = missing_token
         self.min_rows_for_id_check = min_rows_for_id_check
+        self.suppression_codes = suppression_codes
 
     def fit(self, X: pd.DataFrame, y=None) -> "EBMTabularPreprocessor":
         X = pd.DataFrame(X)
@@ -95,6 +110,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             if self._is_mostly_numeric(series, decimal_comma):
                 if decimal_comma:
                     self.decimal_comma_columns_.append(col)
+                self._warn_on_unrecognized_codes(col, series, decimal_comma)
                 # A numeric-looking object column (dirty formatting, blank
                 # rows) is exempt from cardinality-based dropping: EBM bins
                 # continuous values however many distinct values they take.
@@ -229,7 +245,9 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         return bool(eu.any())
 
     def _is_mostly_numeric(self, series: pd.Series, decimal_comma: bool = False) -> bool:
+        """True if enough non-null, non-code values parse as numbers."""
         non_null = series.dropna()
+        non_null = non_null[~self._is_suppression_code(non_null)]
         if len(non_null) == 0:
             return False
         coerced = pd.to_numeric(
@@ -237,15 +255,53 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         )
         return coerced.notna().mean() >= self.numeric_coerce_threshold
 
+    def _warn_on_unrecognized_codes(
+        self, col: str, series: pd.Series, decimal_comma: bool
+    ) -> None:
+        """Flag a numeric column whose unparseable leftovers look like codes.
+
+        They become missing either way; the warning lets the caller confirm
+        that, or add them to ``suppression_codes`` explicitly.
+        """
+        non_null = series.dropna()
+        stripped = self._strip_numeric(non_null, decimal_comma)
+        unparsed = non_null[pd.to_numeric(stripped, errors="coerce").isna() & stripped.notna()]
+        counts = unparsed.astype(str).str.strip().value_counts()
+        if counts.empty or len(counts) > _MAX_UNKNOWN_CODE_TOKENS:
+            return
+        if any(
+            len(token) > _MAX_UNKNOWN_CODE_LENGTH or n < _MIN_UNKNOWN_CODE_REPEATS
+            for token, n in counts.items()
+        ):
+            return
+        tokens = ", ".join(f"'{t}' x{n}" for t, n in counts.items())
+        confirmed = [*self._known_codes(), *counts.index]
+        self.warnings_.append(
+            f"column '{col}' is numeric but has repeated non-numeric values ({tokens}) "
+            "that look like missing-value codes; they are treated as missing. If that "
+            f"is right, retrain with suppression_codes={confirmed} to confirm; if they "
+            "carry meaning, recode them before training"
+        )
+
+    def _known_codes(self) -> list[str]:
+        codes = getattr(self, "suppression_codes", DEFAULT_SUPPRESSION_CODES)
+        return [codes] if isinstance(codes, str) else [str(c) for c in codes]
+
+    def _code_set(self) -> set[str]:
+        return {c.strip().lower() for c in self._known_codes()}
+
+    def _is_suppression_code(self, series: pd.Series) -> pd.Series:
+        return self._strip_symbols(series).str.lower().isin(self._code_set())
+
     @staticmethod
     def _strip_symbols(series: pd.Series) -> pd.Series:
-        return series.astype(str).str.replace(_CURRENCY_RE, "", regex=True)
+        return series.astype(str).str.replace(_SYMBOL_RE, "", regex=True)
 
-    @classmethod
-    def _strip_numeric(cls, series: pd.Series, decimal_comma: bool = False) -> pd.Series:
+    def _strip_numeric(self, series: pd.Series, decimal_comma: bool = False) -> pd.Series:
         if pd.api.types.is_numeric_dtype(series):
             return series
-        cleaned = cls._strip_symbols(series)
+        cleaned = self._strip_symbols(series)
+        cleaned = cleaned.mask(cleaned.str.lower().isin(self._code_set()))
         cleaned = cleaned.str.replace(_PAREN_NEG_RE, r"-\1", regex=True)
         if decimal_comma:
             cleaned = cleaned.str.replace(".", "", regex=False).str.replace(

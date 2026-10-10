@@ -68,8 +68,14 @@ def prep_checklist(target_column: str = "") -> str:
 4. Know what glin's preprocessor already handles for you (don't pre-clean
    these -- it's wasted work and can conflict with its own logic):
    - Dirty-but-numeric columns (currency symbols, commas, stray
-     whitespace) are coerced to numeric automatically as long as
-     >={defaults.numeric_coerce_threshold:.0%} of non-null values parse.
+     whitespace, a trailing "%") are coerced to numeric automatically as
+     long as >={defaults.numeric_coerce_threshold:.0%} of non-null values
+     parse. Percentages stay in percentage points ("44.98%" -> 44.98).
+   - Suppression codes ({", ".join(defaults.suppression_codes)}) in
+     otherwise numeric columns are treated as missing. If train_model's
+     `warnings` say a numeric column has other repeated code-like values,
+     confirm with the user what they mean, then pass them via the
+     `suppression_codes` argument (a list replaces the default set).
    - Missing values are imputed (numeric -> passed through as a native
      missing bin; categorical -> an explicit "{defaults.missing_token}"
      category).
