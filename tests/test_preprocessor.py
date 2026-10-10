@@ -223,3 +223,138 @@ def test_mixed_conventions_warn_and_fall_back_to_us():
     pre = _fit(_col(["1,234.56", "1.234,56", "5", "6", "7"]))
     assert pre.decimal_comma_columns_ == []
     assert any("mixes" in w for w in pre.warnings_)
+
+
+@pytest.mark.parametrize(
+    "values,expected",
+    [
+        (["44.98%", "12%", "100 %"], [44.98, 12.0, 100.0]),
+        (["1,234.5%", "(5%)", "7%"], [1234.5, -5.0, 7.0]),
+        (["12,5%", "3,25%", "100%"], [12.5, 3.25, 100.0]),
+        (["$1,200", "50%", "7"], [1200.0, 50.0, 7.0]),
+    ],
+)
+def test_percent_strings_become_numeric_in_percentage_points(values, expected):
+    pre = _fit(_col(values))
+    assert "x" in pre.numeric_columns_
+    out = pre.transform(_col(values))["x"].tolist()[: len(values)]
+    assert out == pytest.approx(expected)
+    assert pre.warnings_ == []
+
+
+def test_percent_only_stripped_when_trailing():
+    pre = _fit(_col(["5", "6", "7%"]))
+    assert np.isnan(pre.transform({"x": "%5"})["x"].iloc[0])
+
+
+@pytest.mark.parametrize("code", ["SUPP", "NE", "NP", "z"])
+def test_each_default_suppression_code_is_missing_not_categorical(code):
+    values = ["10", "20.5", "30", code]
+    pre = _fit(_col(values))
+    assert "x" in pre.numeric_columns_
+    out = pre.transform(_col(values))["x"].tolist()[:4]
+    assert out[:3] == pytest.approx([10, 20.5, 30])
+    assert np.isnan(out[3])
+    assert pre.warnings_ == []
+
+
+def test_codes_match_case_insensitively_ignoring_whitespace():
+    values = ["10", "20", " supp ", "Ne", "Z", "np"]
+    pre = _fit(_col(values))
+    out = pre.transform(_col(values))["x"].tolist()[:6]
+    assert out[:2] == pytest.approx([10, 20])
+    assert all(np.isnan(v) for v in out[2:])
+
+
+def test_mostly_suppressed_column_stays_numeric_and_is_not_dropped():
+    n = 200
+    values = [str(i % 40) if i % 4 == 0 else "SUPP" for i in range(n)]
+    df = pd.DataFrame({"x": values, "y": np.arange(n) % 7})
+    pre = _fit(df)
+    assert "x" in pre.numeric_columns_
+    assert pre.dropped_columns_ == []
+
+
+def test_mixed_percent_and_suppression_codes():
+    values = ["44.98%", "SUPP", "12.5%", "NE", "z", "NP", "60%"]
+    pre = _fit(_col(values))
+    assert "x" in pre.numeric_columns_
+    out = pre.transform(_col(values))["x"].tolist()[:7]
+    assert [out[0], out[2], out[6]] == pytest.approx([44.98, 12.5, 60.0])
+    assert all(np.isnan(out[i]) for i in (1, 3, 4, 5))
+    assert pre.warnings_ == []
+
+
+def test_percent_and_codes_predict_time_parity():
+    pre = _fit(_col(["44.98%", "SUPP", "12.5%", "NE", "60%"]))
+    batch = pre.transform(pd.DataFrame({"x": ["44.98%", "SUPP", "z"]}))["x"]
+    assert batch.iloc[0] == pytest.approx(44.98)
+    assert batch.iloc[1:].isna().all()
+    assert pre.transform({"x": "44.98%"})["x"].iloc[0] == pytest.approx(44.98)
+    assert np.isnan(pre.transform({"x": "SUPP"})["x"].iloc[0])
+
+    check = pre.check_inputs({"x": "NP"})
+    assert check["missing_features"] == ["x"] and check["warnings"] == []
+    check = pre.check_inputs({"x": "500%"})
+    assert [w["issue"] for w in check["warnings"]] == ["out_of_range"]
+    assert pre.check_inputs({"x": "30%"}) == {"warnings": [], "missing_features": []}
+
+
+def test_custom_suppression_codes_replace_defaults():
+    values = ["10", "20", "30", "40", "50", "60", "70", "80", "90", "[c]", "SUPP"]
+    pre = _fit(_col(values), suppression_codes=["[c]"])
+    out = pre.transform(_col(values))["x"].tolist()[:11]
+    assert out[:3] == pytest.approx([10, 20, 30])
+    assert np.isnan(out[9]) and np.isnan(out[10])
+    assert "('SUPP' x" in pre.warnings_[0]
+    assert clone(pre).suppression_codes == ["[c]"]
+
+
+def test_empty_suppression_codes_disable_recognition():
+    pre = _fit(_col(["a", "b", "c", "NE"]), suppression_codes=())
+    assert "x" in pre.categorical_columns_
+
+
+def test_categorical_column_keeps_codes_as_values():
+    pre = _fit(_col(["NE", "NW", "SE", "SW"]))
+    assert "x" in pre.categorical_columns_
+    assert pre.warnings_ == []
+    assert pre.transform({"x": "ne"})["x"].iloc[0] == "ne"
+
+
+def test_unrecognized_repeated_tokens_in_numeric_column_warn():
+    values = [str(i) for i in range(10, 100, 5)] + ["x", "x", "c"]
+    pre = _fit(_col(values, n=len(values) * 5))
+    assert "x" in pre.numeric_columns_
+    [warning] = pre.warnings_
+    assert "'x'" in warning and "'c'" in warning
+    assert "suppression_codes=['SUPP', 'NE', 'NP', 'z', 'x', 'c']" in warning
+
+
+def test_unrecognized_code_warning_is_quiet_when_codes_are_known():
+    values = ["10", "20", "30", "40", "50", "SUPP", "SUPP", "NE", "NE"]
+    assert _fit(_col(values, n=90)).warnings_ == []
+    values = ["10", "20", "30", "40", "50", "x", "x", "x"]
+    assert _fit(_col(values, n=80), suppression_codes=["x"]).warnings_ == []
+
+
+@pytest.mark.parametrize(
+    "leftovers",
+    [
+        ["oops"],
+        ["a", "a", "b", "b", "c", "c", "d", "d", "e", "e", "f", "f"],
+        ["not applicable", "not applicable"],
+    ],
+)
+def test_unrecognized_code_warning_ignores_non_code_like_leftovers(leftovers):
+    numbers = [str(i) for i in range(100, 160)]
+    df = pd.DataFrame({"x": numbers + leftovers, "y": range(60 + len(leftovers))})
+    pre = _fit(df)
+    assert "x" in pre.numeric_columns_
+    assert pre.warnings_ == []
+
+
+def test_warning_does_not_fire_on_normal_categoricals():
+    pre = _fit(_col(["red", "green", "blue", "N/A?", "red"]))
+    assert "x" in pre.categorical_columns_
+    assert pre.warnings_ == []

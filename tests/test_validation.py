@@ -116,3 +116,41 @@ def test_train_model_drops_rows_with_missing_target():
     df.loc[0:4, "churn"] = np.nan
     bundle = engine.train_model(df, "churn", model_name="missing_target_test")
     assert any("missing target value" in w for w in bundle["warnings"])
+
+
+def _dfe_style_df(n=100, extra_code=None):
+    rng = np.random.RandomState(1)
+    pct = [f"{v:.2f}%" for v in rng.uniform(5, 95, size=n)]
+    pct[::10] = ["SUPP"] * len(pct[::10])
+    if extra_code:
+        pct[5::10] = [extra_code] * len(pct[5::10])
+    return pd.DataFrame({"pct": pct, "churn": rng.choice(["Yes", "No"], size=n)})
+
+
+def test_train_model_handles_percent_and_suppression_columns_without_warning():
+    from glin import engine
+
+    bundle = engine.train_model(
+        _dfe_style_df(), "churn", model_name="pct_test", hyperparameters={"interactions": 0}
+    )
+    assert bundle["preprocessor"].numeric_columns_ == ["pct"]
+    assert bundle["warnings"] == []
+
+
+def test_train_model_surfaces_unrecognized_code_warning_and_custom_codes_silence_it():
+    from glin import engine
+
+    df = _dfe_style_df(extra_code="xx")
+    bundle = engine.train_model(
+        df, "churn", model_name="code_test", hyperparameters={"interactions": 0}
+    )
+    assert any("'xx'" in w and "suppression_codes" in w for w in bundle["warnings"])
+
+    bundle = engine.train_model(
+        df,
+        "churn",
+        model_name="code_test",
+        hyperparameters={"interactions": 0},
+        suppression_codes=["SUPP", "xx"],
+    )
+    assert bundle["warnings"] == []

@@ -129,6 +129,7 @@ def build_server(
         overwrite: bool = False,
         hyperparameters: Optional[dict[str, Any]] = None,
         holdout_fraction: float = 0.2,
+        suppression_codes: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Train an EBM classifier from a CSV and save it as model_name. This
         is also how to retrain an existing model: pass overwrite=True to
@@ -151,7 +152,9 @@ def build_server(
 
         Either way, this tool does no cleanup of its own beyond what
         EBMTabularPreprocessor already does automatically (coercing dirty
-        numeric formatting, dropping ID-like/constant/high-cardinality
+        numeric formatting such as currency symbols, thousands separators and
+        trailing % -- percentages stay in percentage points -- and treating
+        suppression codes as missing, dropping ID-like/constant/high-cardinality
         columns, imputing missing values). If the CSV came from an
         unfamiliar or messy source (wrong delimiter, banner rows before the
         header, embedded JSON cells, date columns, a continuous-looking
@@ -172,6 +175,13 @@ def build_server(
         on hyperparameters retrain with holdout_fraction=0 and overwrite=True
         to fit on all the data (no evaluation is reported in that case). See
         the `tune_model_hyperparameters` prompt for the full loop.
+
+        `suppression_codes` lists the tokens treated as missing in otherwise
+        numeric columns (case-insensitive, whitespace ignored); omit it for
+        the default ["SUPP", "NE", "NP", "z"]. Passing a list replaces the
+        default. If the result's `warnings` say a numeric column has repeated
+        non-numeric values that look like missing-value codes, confirm with
+        the user and pass them here.
         """
         if (csv_path is None) == (csv_content is None):
             raise ValueError("pass exactly one of csv_path or csv_content")
@@ -194,6 +204,7 @@ def build_server(
             model_name=model_name,
             hyperparameters=hyperparameters,
             holdout_fraction=holdout_fraction,
+            suppression_codes=suppression_codes,
         )
         engine.save_bundle(bundle, models_root)
 
