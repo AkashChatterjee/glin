@@ -197,3 +197,31 @@ def test_hyperparameters_reach_the_fitted_ebm(tmp_path):
 
     meta = engine.load_metadata(engine.save_bundle(bundle, tmp_path))
     assert meta["hyperparameters"]["min_samples_leaf"] == 20
+
+
+def test_global_importance_ranks_the_real_drivers_first():
+    df = _synthetic_binary_df(n=500)  # label driven by num1 and cat1; num2 is noise
+    bundle = engine.train_model(
+        df, "label", model_name="gi", hyperparameters={"interactions": 2, "outer_bags": 4}
+    )
+    out = engine.global_importance(bundle)
+
+    ranked = [f["feature"] for f in out["features"]]
+    assert ranked[-1] == "num2"
+    assert set(ranked[:2]) == {"num1", "cat1"}
+    assert out["n_interaction_terms"] == 2
+    assert abs(sum(t["share"] for t in engine.global_importance(bundle, top_n=100)["terms"]) - 1) < 0.01
+
+    shapes = {t["term"]: t["shape"] for t in out["terms"] if "shape" in t}
+    assert shapes["cat1"]["kind"] == "categorical"
+    assert shapes["cat1"]["highest"][0]["category"] == "a"  # cat1=='a' pushes toward positive
+    assert shapes["num1"]["kind"] == "continuous"
+
+
+def test_global_importance_works_for_multiclass_without_shapes():
+    bundle = engine.train_model(
+        _synthetic_multiclass_df(), "label", model_name="gi_mc",
+        hyperparameters={"interactions": 1, "outer_bags": 2},
+    )
+    out = engine.global_importance(bundle)
+    assert out["features"] and all("shape" not in t for t in out["terms"])

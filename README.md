@@ -85,6 +85,7 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 - `inspect_model(model_name)` — feature schema and target classes.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
 - `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a path the server process can read — always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). Returns the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below).
+- `explain_model(model_name, top_n=15, include_shapes=True)` — what the model learned, globally and exactly (read off the additive structure, not sampled from example predictions): every feature ranked by mean absolute log-odds contribution with its main-effect vs interaction split, the top terms including pairwise interactions with their share of the total, and for binary targets a per-feature shape (which categories or value ranges push toward which class).
 - `list_hyperparameters()` — every tunable EBM hyperparameter with its type, default, allowed range, and a note on what raising or lowering it does.
 
 ## Letting an agent tune the model
@@ -95,6 +96,7 @@ To give the agent something to optimize, `train_model` holds out `holdout_fracti
 
 ## Prompts exposed over MCP
 
+- `build_classifier(csv_path="", target_column="", model_name="")` — the whole workflow in one prompt, for any dataset: inspect and clean the CSV, decide which columns are real predictors (dropping target leakage such as outcome-describing text, identifiers, free text and raw dates), tune hyperparameters with overfitting guardrails (fixed holdout, ~10-trial budget, train-vs-holdout gap check, seed-noise check, prefer-the-simpler-config rule, and an early exit when the features carry no signal), refit on all rows, and report honest expected performance. Select it from your MCP client's prompt picker (Claude Desktop lists server prompts in the attach/`+` menu) and give it a file path and target; everything else is optional. It is self-contained, since clients show prompts to the user rather than letting the agent fetch them.
 - `tune_model_hyperparameters(model_name="", target_column="")` — the tuning loop described above, with the live hyperparameter table (defaults and ranges read from the code) embedded.
 - `prepare_csv_for_training(target_column="")` — a checklist an agent should work through before calling `train_model`: parsing gotchas (banner rows, wrong delimiter, ragged rows), how to pick a valid target column, what `glin`'s preprocessor already handles automatically (dirty numeric formatting, missing values, ID-like/constant/high-cardinality columns), and what it doesn't (dates, embedded JSON/list cells, leakage columns, continuous-looking targets) — all pulled live from the preprocessor's actual defaults, so the guidance can't drift out of sync with the code.
 
@@ -145,34 +147,27 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 
 ## Releasing (maintainers)
 
-PyPI rejects re-uploading a version number, so bump `version` in `pyproject.toml` first and double check the metadata (description, classifiers, URLs) before publishing — there's no fixing a released version after the fact, only shipping a new one.
+**Releases are published to PyPI only by the `Publish to PyPI` GitHub Actions workflow ([.github/workflows/publish.yml](.github/workflows/publish.yml)). Nobody uploads from a local machine — no `twine upload`, no `uv publish`, no personal API tokens.** To release, push a tag of the form `vX.Y.Z`:
 
 ```bash
-rm -rf dist
-uv build
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
-Dry run against TestPyPI first:
+The workflow runs the tests on Python 3.10 and 3.12, builds the sdist and wheel, checks that the artifacts carry the tag's version, and publishes them to PyPI as `glin-ml` at that exact version. The package version is derived from the git tag by `hatch-vcs` (`pyproject.toml` has no hardcoded version), so there is nothing to bump or commit before a release. Untagged local builds get a dev version such as `0.1.4.dev1+g3fa91a0`, and a source tree with no git metadata (like the Docker build) reports `0.0.0`. `glin.__version__` reads the installed package metadata. Tags that don't match `vX.Y.Z` are ignored. PyPI rejects re-uploading a version number, so a bad release can only be fixed by tagging a new version.
 
-```bash
-twine upload --repository testpypi dist/*
-# username: __token__, password: a TestPyPI API token
-```
+### One-time setup that makes this the only path
 
-Verify it actually installs from there before touching the real index:
+The workflow publishes through PyPI [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC), which is also what keeps local uploads impossible:
 
-```bash
-pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ glin-ml
-```
+1. **PyPI → the `glin-ml` project → Publishing:** add a trusted publisher for owner `AkashChatterjee`, repository `glin`, workflow `publish.yml`, environment `pypi`.
+2. **PyPI → Account settings → API tokens:** delete every existing API token that can upload `glin-ml`, and don't create new ones. With no tokens and 2FA on, the only credential that can publish is the workflow's short-lived OIDC identity. Also review the project's Collaborators and remove anyone who doesn't need upload rights.
+3. **GitHub → Settings → Rules → Rulesets:** add a tag ruleset for `v*` that restricts who can create tags (and blocks deleting or moving them), since creating a matching tag is what triggers a release.
+4. **GitHub → Settings → Environments → `pypi`:** add required reviewers, so every release needs a manual approval before the upload step runs.
 
-Then publish for real:
+### Checking a release
 
-```bash
-twine upload dist/*
-# username: __token__, password: a PyPI API token (separate account/token from TestPyPI)
-```
-
-Confirm the public release works with a clean install:
+To sanity-check a build without publishing anything, `uv build` locally and inspect `dist/` — but never upload it. After a release, confirm the public package works with a clean install:
 
 ```bash
 uv tool install glin-ml
