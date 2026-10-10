@@ -4,6 +4,8 @@
 
 - Ensure you always keep the README.md updated with the latest state of the code/library.
 
+- For any markdown file, report generation or any writeups in the tracked repo or .localdev, follow ASD-STE100 language specifications at 80% strictness.
+
 # Local Testing, Explorations and Planning
 
 - For any local testing, research and explorations that requires generating any artifacts/reports, use the .localdev folder in the root (it's gitignored)
