@@ -257,7 +257,8 @@ def train_model(
         "evaluation": evaluation,
         "training_rows": len(y),
         "training_seconds": training_seconds,
-        "warnings": [issue.message for issue in validation.warnings],
+        "warnings": [issue.message for issue in validation.warnings]
+        + preprocessor.warnings_,
     }
 
 

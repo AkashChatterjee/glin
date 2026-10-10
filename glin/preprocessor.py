@@ -15,6 +15,8 @@ the first place. See tests/test_preprocessor.py for the exact per-column
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -22,6 +24,14 @@ from sklearn.utils.validation import check_is_fitted
 
 CONTINUOUS = "continuous"
 NOMINAL = "nominal"
+
+_CURRENCY_RE = re.compile(r"[$€£¥₹₩₽₺₪฿\s\u00a0]")
+_PAREN_NEG_RE = re.compile(r"^\((.*)\)$")
+_EU_ONLY_COMMA_RE = re.compile(r"^[-+]?\d*,\d{1,2}$|^[-+]?\d*,\d{4,}$")
+_EU_GROUPED_DOTS_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3}){2,}(,\d+)?$")
+_EU_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3})+,\d+$")
+_US_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3})+\.\d+$")
+_US_GROUPED_COMMAS_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3}){2,}$")
 
 
 class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
@@ -53,6 +63,8 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         n_rows = len(X)
 
         dropped: list[str] = []
+        self.decimal_comma_columns_: list[str] = []
+        self.warnings_: list[str] = []
         numeric_cols: list[str] = []
         categorical_cols: list[str] = []
 
@@ -79,7 +91,10 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                 numeric_cols.append(col)
                 continue
 
-            if self._is_mostly_numeric(series):
+            decimal_comma = self._detect_decimal_comma(col, series)
+            if self._is_mostly_numeric(series, decimal_comma):
+                if decimal_comma:
+                    self.decimal_comma_columns_.append(col)
                 # A numeric-looking object column (dirty formatting, blank
                 # rows) is exempt from cardinality-based dropping: EBM bins
                 # continuous values however many distinct values they take.
@@ -119,7 +134,10 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
 
         for col in self.numeric_columns_:
             if col in X.columns:
-                out[col] = pd.to_numeric(self._strip_numeric(X[col]), errors="coerce")
+                out[col] = pd.to_numeric(
+                    self._strip_numeric(X[col], col in self.decimal_comma_columns_),
+                    errors="coerce",
+                )
             else:
                 out[col] = np.nan
 
@@ -139,19 +157,52 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         check_is_fitted(self, "output_columns_")
         return [self.feature_types_[col] for col in self.output_columns_]
 
-    def _is_mostly_numeric(self, series: pd.Series) -> bool:
+    def _detect_decimal_comma(self, col: str, series: pd.Series) -> bool:
+        """True if the column uses the European convention (``1.234,56``).
+
+        Only unambiguous evidence counts; a bare ``1,234`` is read as a US
+        thousands group. Mixed conventions fall back to US with a warning.
+        """
+        if pd.api.types.is_numeric_dtype(series):
+            return False
+        cleaned = self._strip_symbols(series.dropna())
+        eu = cleaned.str.match(_EU_BOTH_RE) | cleaned.str.match(_EU_GROUPED_DOTS_RE)
+        eu |= cleaned.str.match(_EU_ONLY_COMMA_RE)
+        us = cleaned.str.match(_US_BOTH_RE) | cleaned.str.match(_US_GROUPED_COMMAS_RE)
+        if eu.any() and us.any():
+            self.warnings_.append(
+                f"column '{col}' mixes US (1,234.56) and European (1.234,56) number "
+                "formats; parsing as US, so European-style values may become missing"
+            )
+            return False
+        return bool(eu.any())
+
+    def _is_mostly_numeric(self, series: pd.Series, decimal_comma: bool = False) -> bool:
         non_null = series.dropna()
         if len(non_null) == 0:
             return False
-        coerced = pd.to_numeric(self._strip_numeric(non_null), errors="coerce")
+        coerced = pd.to_numeric(
+            self._strip_numeric(non_null, decimal_comma), errors="coerce"
+        )
         return coerced.notna().mean() >= self.numeric_coerce_threshold
 
     @staticmethod
-    def _strip_numeric(series: pd.Series) -> pd.Series:
+    def _strip_symbols(series: pd.Series) -> pd.Series:
+        return series.astype(str).str.replace(_CURRENCY_RE, "", regex=True)
+
+    @classmethod
+    def _strip_numeric(cls, series: pd.Series, decimal_comma: bool = False) -> pd.Series:
         if pd.api.types.is_numeric_dtype(series):
             return series
-        stripped = series.astype(str).str.strip()
-        return stripped.replace({"": np.nan, "nan": np.nan, "None": np.nan})
+        cleaned = cls._strip_symbols(series)
+        cleaned = cleaned.str.replace(_PAREN_NEG_RE, r"-\1", regex=True)
+        if decimal_comma:
+            cleaned = cleaned.str.replace(".", "", regex=False).str.replace(
+                ",", ".", regex=False
+            )
+        else:
+            cleaned = cleaned.str.replace(",", "", regex=False)
+        return cleaned.replace({"": np.nan, "nan": np.nan, "None": np.nan})
 
     def _clean_categorical(self, series: pd.Series) -> pd.Series:
         cleaned = series.astype(str).str.strip().str.lower()
