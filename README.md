@@ -1,5 +1,7 @@
 # glin
 
+☕ If glin is useful to you and you'd like to help maintain it, you can [buy me a coffee](https://buymeacoffee.com/akashchatterjee).
+
 CLI tool and Python library that equips AI agents with an instant, statistical "gut feeling" (System 1 thinking).
 
 `glin` trains an [Explainable Boosting Machine](https://interpret.ml/) on a CSV, then exposes it to LLM agents over [MCP](https://modelcontextprotocol.io/) — locally over stdio. Every prediction comes with an exact, zero-approximation breakdown of which features drove it, straight from the model's own additive structure (no SHAP/LIME approximation).
