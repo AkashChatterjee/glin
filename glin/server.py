@@ -61,6 +61,21 @@ def build_server(
         return engine.explain_record(bundle, features, top_n=top_n)
 
     @mcp.tool()
+    def explain_model(
+        model_name: str, top_n: int = 15, include_shapes: bool = True
+    ) -> dict[str, Any]:
+        """Global view of what a trained model learned, exact rather than
+        sampled from example predictions: every feature ranked by its mean
+        absolute contribution to the log-odds (`features`, with main-effect
+        vs interaction split), the top terms including pairwise interactions
+        (`terms`, each with its share of the total), and, for binary targets,
+        a `shape` per main effect showing which categories or value ranges
+        push the prediction up or down. Use this to answer "what drives this
+        model" instead of running `predict` on a handful of rows."""
+        bundle = engine.load_bundle(_model_dir(model_name))
+        return engine.global_importance(bundle, top_n=top_n, include_shapes=include_shapes)
+
+    @mcp.tool()
     def list_hyperparameters() -> list[dict[str, Any]]:
         """Every EBM training hyperparameter `train_model` accepts in its
         `hyperparameters` argument: name, type, default, allowed range, and

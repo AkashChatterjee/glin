@@ -299,6 +299,7 @@ balanced_accuracy, roc_auc, seconds; with baseline_log_loss for reference.
    - Expected performance = the winning trial's HOLDOUT numbers (the final \
 model trained on all rows has no evaluation of its own), with the caveat that \
 it was selected on that holdout and so is slightly optimistic.
-   - Which features mattered most (use `predict` on a couple of representative \
-rows to show the per-feature contributions), and any caveats (small data, \
+   - Which features mattered most: call `explain_model` on the final model for \
+the exact ranking, interaction terms, and per-feature shapes (don't \
+approximate it from a few `predict` calls), and any caveats (small data, \
 class imbalance, columns glin dropped that you'd have wanted to keep)."""

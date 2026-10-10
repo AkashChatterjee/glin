@@ -47,6 +47,7 @@ async def test_all_tools_registered(models_root):
         "predict",
         "train_model",
         "list_hyperparameters",
+        "explain_model",
     }
 
 
@@ -354,6 +355,15 @@ async def test_build_classifier_prompt_is_self_contained_and_generic(models_root
 
 
 @pytest.mark.asyncio
+async def test_explain_model_tool_returns_global_importance(models_root):
+    mcp = server.build_server(models_root=models_root)
+    _, out = await mcp.call_tool("explain_model", {"model_name": "server_test_model"})
+    assert {f["feature"] for f in out["features"]} == {"age", "plan"}
+    assert out["features"][0]["feature"] == "age"  # churn is a function of age
+    assert out["terms"][0]["share"] > 0.5
+
+
+@pytest.mark.asyncio
 async def test_streamable_http_real_mcp_client_round_trip(models_root):
     """End-to-end proof that a genuine MCP client (not a bespoke protocol)
     can connect over the network and call glin's tools — the actual
@@ -385,6 +395,7 @@ async def test_streamable_http_real_mcp_client_round_trip(models_root):
                     "predict",
                     "train_model",
                     "list_hyperparameters",
+                    "explain_model",
                 }
 
                 result = await session.call_tool(

@@ -90,8 +90,8 @@ _ALL = [
         "effects (0 = purely additive model, the simplest and most readable). "
         "Each one is chosen by gain on the residuals. Raise it if the "
         "holdout metric keeps improving; lower it (or 0) if holdout log-loss "
-        "is worse than train, or you want maximum interpretability. Ignored "
-        "for targets with >2 classes (interpret-core drops interactions for multiclass).",
+        "is worse than train, or you want maximum interpretability. Pairs only "
+        "(never 3-way), capped at the number of feature pairs available.",
     ),
     Hyperparameter(
         "learning_rate", float, 0.0001, 0.5,

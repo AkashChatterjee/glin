@@ -110,8 +110,8 @@ def train_model(
 ) -> dict[str, Any]:
     """Fits EBMTabularPreprocessor on the feature columns and an
     ExplainableBoostingClassifier on the transformed output. Works for
-    binary or multiclass targets (interpret-core automatically strips
-    interaction terms for multiclass models). Raises ValueError if the
+    binary or multiclass targets (interaction terms are fitted for both
+    in interpret-core 0.7.8). Raises ValueError if the
     dataset fails a hard validation rule (see glin.validation); returns any
     soft warnings alongside the trained bundle.
 
@@ -423,4 +423,95 @@ def explain_record(
         "reconstructed_probability": reconstructed,
         "model_probability": model_probability,
         "additivity_verified": bool(np.all(np.abs(reconstructed_vec - proba) < 1e-3)),
+    }
+
+
+def _shape_summary(global_data: dict[str, Any], top_k: int = 3) -> dict[str, Any]:
+    """Compact description of one main-effect curve: for a categorical, the
+    categories pushing hardest toward and away from the positive class; for a
+    continuous feature, where the curve peaks and bottoms out. Scores are
+    log-odds contributions (the same units ``predict`` reports)."""
+    scores = np.asarray(global_data["scores"], dtype=float)
+    names = list(global_data["names"])
+    if len(scores) == len(names):  # categorical: one score per category
+        order = np.argsort(scores)
+        pick = lambda idx: [{"category": str(names[i]), "score": round(float(scores[i]), 4)} for i in idx]
+        return {
+            "kind": "categorical",
+            "highest": pick(order[::-1][:top_k]),
+            "lowest": pick(order[:top_k]),
+        }
+    # continuous: len(names) == len(scores) + 1 bin edges
+    lo = global_data.get("lower_bounds", names[:-1])
+    hi = global_data.get("upper_bounds", names[1:])
+    imax, imin = int(np.argmax(scores)), int(np.argmin(scores))
+    at = lambda i: f"[{float(lo[i]):.4g}, {float(hi[i]):.4g}]"
+    return {
+        "kind": "continuous",
+        "highest": {"range": at(imax), "score": round(float(scores[imax]), 4)},
+        "lowest": {"range": at(imin), "score": round(float(scores[imin]), 4)},
+    }
+
+
+def global_importance(
+    bundle: dict[str, Any], top_n: int = 15, include_shapes: bool = True
+) -> dict[str, Any]:
+    """Model-wide feature importance, straight from the fitted additive
+    structure (no sampling, no approximation): each term's importance is the
+    mean absolute contribution it makes to the log-odds across the training
+    data (interpret-core's ``term_importances``). Reported per term (main
+    effects and pairwise interactions) and rolled up per feature, with each
+    feature's share of the total. For binary targets, main effects also get
+    a short shape summary showing which values push the prediction up or down."""
+    model = bundle["model"]
+    names_in = list(model.feature_names_in_)
+    importances = np.asarray(model.term_importances(), dtype=float)
+    total = float(importances.sum()) or 1.0
+
+    glob = model.explain_global() if include_shapes and len(bundle["target_classes"]) == 2 else None
+
+    terms = []
+    per_feature: dict[str, dict[str, float]] = {n: {"main": 0.0, "interaction": 0.0} for n in names_in}
+    for i, (idx_tuple, imp) in enumerate(zip(model.term_features_, importances)):
+        involved = [names_in[j] for j in idx_tuple]
+        is_interaction = len(idx_tuple) > 1
+        for f in involved:
+            per_feature[f]["interaction" if is_interaction else "main"] += float(imp)
+        term: dict[str, Any] = {
+            "term": " & ".join(involved),
+            "is_interaction": is_interaction,
+            "importance": round(float(imp), 4),
+            "share": round(float(imp) / total, 4),
+        }
+        if glob is not None and not is_interaction:
+            term["shape"] = _shape_summary(glob.data(i))
+        terms.append(term)
+    terms.sort(key=lambda t: t["importance"], reverse=True)
+
+    features = [
+        {
+            "feature": f,
+            "total_importance": round(v["main"] + v["interaction"], 4),
+            "main_effect": round(v["main"], 4),
+            "via_interactions": round(v["interaction"], 4),
+        }
+        for f, v in per_feature.items()
+    ]
+    features.sort(key=lambda r: r["total_importance"], reverse=True)
+
+    binary = len(bundle["target_classes"]) == 2
+    return {
+        **(
+            {"shape_score_meaning": f"positive score pushes toward '{bundle['target_classes'][1]}', negative toward '{bundle['target_classes'][0]}'"}
+            if glob is not None and binary
+            else {}
+        ),
+        "importance_definition": (
+            "mean absolute contribution to the log-odds across the training data; "
+            "units are comparable within this model only"
+        ),
+        "features": features,
+        "terms": terms[:top_n],
+        "n_terms": len(terms),
+        "n_interaction_terms": sum(t["is_interaction"] for t in terms),
     }
