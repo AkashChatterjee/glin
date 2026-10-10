@@ -31,7 +31,6 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
   - [Feature columns: not yet supported](#feature-columns-not-yet-supported)
   - [Target leakage check](#target-leakage-check)
   - [Target column requirements](#target-column-requirements)
-- [Known issues](#known-issues)
 - [Releasing (maintainers)](#releasing-maintainers)
 
 ## Install
@@ -142,7 +141,7 @@ Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All t
 - `explain_model(model_name, top_n=15, include_shapes=True)` shows what the model learned. glin reads it exactly from the additive structure. It does not sample example predictions. The result has:
   - every feature, ranked by mean absolute log-odds contribution, with its main-effect part and its interaction part;
   - the top terms, including pairwise interactions, with their share of the total;
-  - for binary targets, a shape for each feature that shows which categories or value ranges push toward which class (see [Known issues](#known-issues)).
+  - for binary targets, a shape for each feature that shows which categories or value ranges push toward which class. For a continuous feature, the shape gives the value range (bin edges, in the units of the feature) where the curve is highest and lowest.
 - `list_hyperparameters()` lists every EBM hyperparameter. Each entry has its type, default, allowed range and a note on what a higher or lower value does.
 
 ## Prompts exposed over MCP
@@ -310,10 +309,6 @@ glin flags such a column in `warnings` as `Possible target leakage: ...`. The wa
 - A numeric target with more than 20 distinct values triggers a warning that it looks like a regression target. glin trains classifiers, not regressors, so each value would become its own unrelated class. Band the target into a few classes (quantiles or domain thresholds), or pick another target.
 - A numeric target with 3 to 20 distinct values (for example a score or an ordinal level) triggers a warning. The multiclass model ignores the order of the values. Use fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts give the same guidance.
 - Full regression (the upstream `ExplainableBoostingRegressor`) is planned separately. It is not yet supported.
-
-## Known issues
-
-- **`explain_model` shape ranges:** For continuous features, the `range` text in `shape` shows the error bars of the score. It does not show the values of the feature. The scores and the importances are correct. See [#38](https://github.com/AkashChatterjee/glin/issues/38).
 
 ## Releasing (maintainers)
 
