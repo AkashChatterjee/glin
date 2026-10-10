@@ -22,6 +22,8 @@ pipx install glin-ml        # equivalent, if you use pipx instead of uv
 pip install glin-ml         # plain pip also works, into whatever environment is active
 ```
 
+To read Excel files (`.xlsx` / `.xls`), install the optional extra: `uv tool install 'glin-ml[excel]'` or `pip install 'glin-ml[excel]'` (see [Excel input](#excel-input-xlsx--xls)).
+
 Either way, you get the `glin` command:
 
 ```bash
@@ -33,7 +35,7 @@ glin --help
 ```bash
 git clone https://github.com/AkashChatterjee/glin.git
 cd glin
-pip install -e ".[dev]"
+pip install -e ".[dev]"      # dev also pulls in the Excel libraries (plus xlwt, to build .xls test fixtures)
 ```
 
 glin works with both the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1,<3`); the test suite runs against each. To test a specific line, add a constraint, e.g. `pip install -e ".[dev]" "mcp>=2,<3"`.
@@ -45,6 +47,22 @@ glin train path/to/data.csv --target churn --name churn_v1
 ```
 
 Models are saved under `~/.glin/models/<name>/`.
+
+### Excel input (`.xlsx` / `.xls`)
+
+Spreadsheets as published by governments and analysts train directly, banner rows and merged headers included. Excel support is an optional extra so the base install stays lean (`openpyxl` reads `.xlsx`, `xlrd` reads legacy `.xls`):
+
+```bash
+pip install 'glin-ml[excel]'
+glin train report.xlsx --target outcome --name report_v1                   # one sheet
+glin train report.xlsx --sheet "Data 2023" --target outcome --name r_v1    # name, or 1-based position
+glin train report.xlsx --sheet 2 --header-rows 3-4 --target outcome --name r_v1
+```
+
+- **Sheet:** `--sheet` takes a name or a 1-based position. A single-sheet workbook needs no flag; a multi-sheet one without `--sheet` is an error that lists the sheets.
+- **Header detection:** with no `--header-rows`, glin finds the first mostly-filled, label-like row and skips title/banner rows above it, blank rows, and trailing single-cell footnotes. If that is ambiguous (e.g. a sparse group-label row sits directly above or below the header row, or the first full row looks like data) it stops with an error naming the rows and asking for `--header-rows` rather than guessing.
+- **`--header-rows`:** 1-based row numbers as shown in Excel: `4`, `3-4` or `3,4`. Multi-row headers are flattened into one name per column joined with ` - ` (`2023 - sales`); blank cells in upper header rows continue the label to their left (merged group headers), blanks and repeated parts are dropped, and duplicate names get `_2`, `_3` suffixes. Data starts below the last header row. The sheet, header rows and number of rows read are printed.
+- Cell values come from the file's cached results, so formulas must have been calculated and saved by a spreadsheet app. Fully empty rows and columns are dropped. CSV behaviour is unchanged, and `--sheet`/`--header-rows` are rejected for CSV.
 
 ```bash
 glin list
@@ -77,13 +95,13 @@ Every tool carries MCP annotations (title, `readOnlyHint`, `destructiveHint`): a
 - `list_models()` — all trained models available.
 - `inspect_model(model_name)` — feature schema and target classes. Date columns are listed under `features.date`, each with its derived terms and the `start_date` that `days_since_start` counts from.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability. Also returns `warnings` for inputs the model never saw (each with `feature`, `value`, `issue` of `unseen_category`, `out_of_range` or `unparseable_date`, and the `training_range` for numerics and dates) and `missing_features` for absent/blank inputs, which are valid but reported separately. Pass a date column as its raw value (`"signup_date": "2024-03-06"`); glin derives the same `signup_date__*` terms as at training time, so contributions name them individually (`signup_date__day_of_week` = `sat`), and a date that is absent, blank or unparseable is treated as missing (unparseable adds a warning).
-- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2, suppression_codes=None)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a `.csv` file the server may read — see [Restricting `csv_path`](#restricting-csv_path); always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). `suppression_codes` overrides the tokens treated as missing in numeric columns (default `["SUPP", "NE", "NP", "z"]`; see the data-requirements table). Returns the kept/dropped features (`date_columns` maps each expanded date column to its derived terms), the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below). `warnings` also carries any "Possible target leakage" entries (see [Target leakage check](#target-leakage-check)).
+- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2, suppression_codes=None)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a `.csv`, `.xlsx` or `.xls` file the server may read — see [Restricting `csv_path`](#restricting-csv_path); always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). `suppression_codes` overrides the tokens treated as missing in numeric columns (default `["SUPP", "NE", "NP", "z"]`; see the data-requirements table). Returns the kept/dropped features (`date_columns` maps each expanded date column to its derived terms), the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below). For Excel files (needs `glin-ml[excel]`) two more arguments apply, `sheet` (name or 1-based position; required for multi-sheet workbooks) and `header_rows` (`4`, `"3-4"` or `[3, 4]`; auto-detected when omitted, see [Excel input](#excel-input-xlsx--xls)), and the result also reports the `sheet` and `header_rows` actually used. `warnings` also carries any "Possible target leakage" entries (see [Target leakage check](#target-leakage-check)).
 - `explain_model(model_name, top_n=15, include_shapes=True)` — what the model learned, globally and exactly (read off the additive structure, not sampled from example predictions): every feature ranked by mean absolute log-odds contribution with its main-effect vs interaction split, the top terms including pairwise interactions with their share of the total, and for binary targets a per-feature shape (which categories or value ranges push toward which class).
 - `list_hyperparameters()` — every tunable EBM hyperparameter with its type, default, allowed range, and a note on what raising or lowering it does.
 
 ## Restricting `csv_path`
 
-`train_model(csv_path=...)` only reads a regular file ending in `.csv` whose fully resolved path (symlinks and `..` followed) lies inside an allowed directory. Directories, devices, other extensions, missing files, traversal and symlinks pointing outside are rejected with an error that never includes file contents. By default the allowed directories are the server's home and working directories; override with a repeatable flag:
+`train_model(csv_path=...)` (the parameter name is kept for compatibility; it also takes Excel files) only reads a regular file ending in `.csv`, `.xlsx` or `.xls` whose fully resolved path (symlinks and `..` followed) lies inside an allowed directory. Directories, devices, other extensions, missing files, traversal and symlinks pointing outside are rejected with an error that never includes file contents. By default the allowed directories are the server's home and working directories; override with a repeatable flag:
 
 ```bash
 glin serve --allow-dir /data/csvs --allow-dir /srv/uploads
@@ -101,7 +119,7 @@ To give the agent something to optimize, `train_model` holds out `holdout_fracti
 
 - `build_classifier(csv_path="", target_column="", model_name="")` — the whole workflow in one prompt, for any dataset: inspect and clean the CSV, decide which columns are real predictors (dropping target leakage such as outcome-describing text, identifiers, free text and post-outcome dates), tune hyperparameters with overfitting guardrails (fixed holdout, ~10-trial budget, train-vs-holdout gap check, seed-noise check, prefer-the-simpler-config rule, and an early exit when the features carry no signal), refit on all rows, and report honest expected performance. Select it from your MCP client's prompt picker (Claude Desktop lists server prompts in the attach/`+` menu) and give it a file path and target; everything else is optional. It is self-contained, since clients show prompts to the user rather than letting the agent fetch them.
 - `tune_model_hyperparameters(model_name="", target_column="")` — the tuning loop described above, with the live hyperparameter table (defaults and ranges read from the code) embedded.
-- `prepare_csv_for_training(target_column="")` — a checklist an agent should work through before calling `train_model`: parsing gotchas (banner rows, wrong delimiter, ragged rows), how to pick a valid target column, what `glin`'s preprocessor already handles automatically (dirty numeric formatting, date/timestamp expansion, missing values, ID-like/constant/high-cardinality columns), and what it doesn't (dates stored as bare numbers, embedded JSON/list cells, leakage columns, continuous-looking targets) — all pulled live from the preprocessor's actual defaults, so the guidance can't drift out of sync with the code.
+- `prepare_csv_for_training(target_column="")` — a checklist an agent should work through before calling `train_model`: parsing gotchas (banner rows, wrong delimiter, ragged rows, Excel sheet and header-row selection), how to pick a valid target column, what `glin`'s preprocessor already handles automatically (dirty numeric formatting, date/timestamp expansion, missing values, ID-like/constant/high-cardinality columns), and what it doesn't (dates stored as bare numbers, embedded JSON/list cells, leakage columns, continuous-looking targets) — all pulled live from the preprocessor's actual defaults, so the guidance can't drift out of sync with the code.
 
 ## Example: ask Claude directly
 
@@ -121,7 +139,7 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 
 ## Data requirements
 
-`glin train` validates your CSV before doing any work — hard problems (e.g. a target column with only one class) stop training with a clear error; soft issues (e.g. a numeric target with many distinct values) print a warning and training proceeds anyway. These rules live in `glin/validation.py` as a flat, appendable list, so support for a currently-unsupported shape below can be added by adding one rule and one preprocessing case, without touching the rest of the pipeline.
+`glin train` validates your data (CSV or a sheet of an Excel workbook, after header detection) before doing any work — hard problems (e.g. a target column with only one class) stop training with a clear error; soft issues (e.g. a numeric target with many distinct values) print a warning and training proceeds anyway. These rules live in `glin/validation.py` as a flat, appendable list, so support for a currently-unsupported shape below can be added by adding one rule and one preprocessing case, without touching the rest of the pipeline.
 
 **Feature columns — supported today:**
 

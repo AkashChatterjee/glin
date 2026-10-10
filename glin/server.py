@@ -12,6 +12,7 @@ from mcp.types import ToolAnnotations
 from glin import engine, prompts
 from glin.engine import DEFAULT_MODELS_ROOT
 from glin.hyperparameters import HYPERPARAMETERS
+from glin.loaders import EXCEL_SUFFIXES, HeaderRows, SheetRef, load_table
 
 try:  # mcp 2.x
     from mcp.server.mcpserver import MCPServer
@@ -25,12 +26,16 @@ def default_allowed_dirs() -> list[Path]:
     return [Path.home(), Path.cwd()]
 
 
+READABLE_SUFFIXES = (".csv", *EXCEL_SUFFIXES)
+
+
 def resolve_csv_path(csv_path: str, allowed_dirs: list[Path]) -> Path:
-    """Validate a client-supplied CSV path. Errors never echo file contents,
-    and don't reveal whether a path outside the allowed directories exists."""
+    """Validate a client-supplied data-file path (.csv, .xlsx or .xls). Errors
+    never echo file contents, and don't reveal whether a path outside the
+    allowed directories exists."""
     path = Path(csv_path).expanduser()
-    if path.suffix.lower() != ".csv":
-        raise ValueError("csv_path must point to a .csv file")
+    if path.suffix.lower() not in READABLE_SUFFIXES:
+        raise ValueError("csv_path must point to a .csv, .xlsx or .xls file")
     try:
         resolved = path.resolve(strict=True)
     except (OSError, RuntimeError):
@@ -41,8 +46,8 @@ def resolve_csv_path(csv_path: str, allowed_dirs: list[Path]) -> Path:
             "csv_path not found or outside the directories this server may read "
             "(see `glin serve --allow-dir`)"
         )
-    if resolved.suffix.lower() != ".csv" or not resolved.is_file():
-        raise ValueError("csv_path must be a regular .csv file")
+    if resolved.suffix.lower() not in READABLE_SUFFIXES or not resolved.is_file():
+        raise ValueError(f"csv_path must be a regular {path.suffix.lower()} file")
     return resolved
 
 
@@ -153,18 +158,21 @@ def build_server(
         hyperparameters: Optional[dict[str, Any]] = None,
         holdout_fraction: float = 0.2,
         suppression_codes: Optional[list[str]] = None,
+        sheet: SheetRef = None,
+        header_rows: HeaderRows = None,
     ) -> dict[str, Any]:
-        """Train an EBM classifier from a CSV and save it as model_name. This
+        """Train an EBM classifier from a CSV or Excel file and save it as model_name. This
         is also how to retrain an existing model: pass overwrite=True to
         replace it with a freshly trained model (e.g. on updated data) --
         otherwise a pre-existing model_name is rejected so it isn't silently
         clobbered.
 
         Pass exactly one of:
-        - csv_path: a .csv file inside a directory this server allows (it
-          does the reading itself). Always prefer this -- it works for CSVs
-          of any size without the calling agent ever having to read or
-          reproduce the file's contents itself.
+        - csv_path: a .csv, .xlsx or .xls file inside a directory this
+          server allows (it does the reading itself). Always prefer this --
+          it works for files of any size without the calling agent ever
+          having to read or reproduce the file's contents itself. Excel
+          files need the optional `glin-ml[excel]` install.
         - csv_content: the complete raw CSV text (header row + data rows).
           Only use this when there's no file on disk to point at, e.g.
           data pasted into the chat or assembled in memory. Do not use this for large files --
@@ -172,6 +180,15 @@ def build_server(
           argument is slow, burns enormous context, and risks truncation.
           Prefer writing the data to a file the server can see (csv_path)
           whenever that's possible instead.
+
+        Excel only (csv_path ending in .xlsx/.xls): `sheet` picks the sheet
+        by name or 1-based position (required when the workbook has several
+        sheets). The header row is auto-detected, skipping title/banner rows
+        and trailing footnotes; if that is ambiguous the error says so. For
+        multi-row or merged headers set `header_rows` to the 1-based sheet
+        row numbers as shown in Excel: 4, "3-4" or [3, 4]; they are
+        flattened into unique column names and data starts below them. The
+        result reports the `sheet` and `header_rows` actually used.
 
         Either way, this tool does no cleanup of its own beyond what
         EBMTabularPreprocessor already does automatically (coercing dirty
@@ -182,7 +199,7 @@ def build_server(
         `<col>__<part>`, dropping ID-like/constant/high-cardinality columns,
         imputing missing values). If the CSV came from an
         unfamiliar or messy source (wrong delimiter, banner rows before the
-        header, embedded JSON cells, dates stored as bare numbers, a
+        header in a CSV, embedded JSON cells, dates stored as bare numbers, a
         continuous-looking target, etc.), work through the checklist in the `prepare_csv_for_training`
         MCP prompt first (or the `build_classifier` prompt for the full
         prepare -> tune -> report workflow) -- those are judgment calls this
@@ -225,11 +242,14 @@ def build_server(
                 "overwrite=True to retrain it with this data"
             )
 
-        df = (
-            pd.read_csv(resolve_csv_path(csv_path, allowed))
-            if csv_path is not None
-            else pd.read_csv(io.StringIO(csv_content))
-        )
+        source = None
+        if csv_path is not None:
+            source = load_table(resolve_csv_path(csv_path, allowed), sheet, header_rows)
+            df = source.df
+        else:
+            if sheet is not None or header_rows is not None:
+                raise ValueError("sheet and header_rows only apply to Excel csv_path files")
+            df = pd.read_csv(io.StringIO(csv_content))
         bundle = engine.train_model(
             df,
             target_column,
@@ -242,7 +262,7 @@ def build_server(
 
         preprocessor = bundle["preprocessor"]
         term_features = bundle["model"].term_features_
-        return {
+        result: dict[str, Any] = {
             "model_name": model_name,
             "target_column": target_column,
             "rows_read": len(df),
@@ -261,6 +281,10 @@ def build_server(
             },
             "evaluation": bundle["evaluation"],
         }
+        if source is not None and source.sheet is not None:
+            result["sheet"] = source.sheet
+            result["header_rows"] = source.header_rows
+        return result
 
     @mcp.prompt()
     def build_classifier(

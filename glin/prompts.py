@@ -24,9 +24,11 @@ def prep_checklist(target_column: str = "") -> str:
     )
     return f"""{target_line}
 
-1. Decide how you'll hand the CSV to train_model.
+1. Decide how you'll hand the data to train_model.
    - If the file is on disk, pass csv_path and let the server read the
-     file itself (the server runs locally, on the same machine).
+     file itself (the server runs locally, on the same machine). csv_path
+     accepts .csv, .xlsx and .xls files (Excel needs the optional
+     `glin-ml[excel]` install; if train_model says so, tell the user).
    - Only pass csv_content (the raw CSV text inline) when there's no file
      to point at, e.g. data pasted into the chat. Never
      inline a large file this way -- reproducing tens of thousands of rows
@@ -39,6 +41,18 @@ def prep_checklist(target_column: str = "") -> str:
      it's a clean, comma-delimited, one-header-row CSV. Exports from
      spreadsheet tools often prepend banner/title rows, blank rows, or a
      second header row -- skip those before the real header.
+   - Excel files (.xlsx/.xls) are read by train_model directly; don't
+     convert them to CSV. Pick the sheet with `sheet` (name or 1-based
+     position; required when the workbook has several sheets -- the error
+     lists them). The header row is auto-detected, skipping title/banner
+     rows and trailing footnotes. If detection reports an ambiguous
+     header, or the sheet has a multi-row / merged header, look at the
+     sheet's first rows and pass `header_rows` using the row numbers as
+     Excel shows them (4, "3-4" or [3, 4]); the rows are joined into
+     column names like "2023 - sales". Check the returned `sheet`,
+     `header_rows` and `features_kept` to confirm the columns came out
+     right, and reference columns (e.g. the target) by those flattened
+     names.
    - Confirm the delimiter is actually a comma (not ';', tab, or '|'). If
      not, convert it before handing the CSV off -- train_model always
      parses with pandas' default comma-delimited reader.
@@ -259,14 +273,14 @@ out-of-sample metrics it returns. Work through this loop.
 
 
 def prep_prompt(target_column: str = "") -> str:
-    return f"""You're about to train a glin model from a CSV file you were handed. \
+    return f"""You're about to train a glin model from a CSV or Excel file you were handed. \
 Before calling the `train_model` tool, work through this checklist -- glin's \
 preprocessor handles a lot automatically, but not everything, and it will \
 happily train a bad model on data it wasn't designed to catch.
 
 {prep_checklist(target_column)}
 
-Once the CSV is clean, call `train_model` with csv_path (preferred) or \
+Once the data is clean, call `train_model` with csv_path (preferred) or \
 csv_content, the exact target column name, and a `model_name` to save it \
 under."""
 
