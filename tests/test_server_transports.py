@@ -1,3 +1,4 @@
+import asyncio
 import sys
 
 import numpy as np
@@ -388,3 +389,19 @@ async def test_stdio_real_mcp_client_round_trip(models_root):
                 },
             )
             assert result.structuredContent["predicted_class"] in ("Yes", "No")
+
+
+def test_all_tools_have_annotations(tmp_path):
+    tools = asyncio.run(server.build_server(models_root=tmp_path).list_tools())
+    assert len(tools) == 6
+    for tool in tools:
+        assert tool.annotations is not None, tool.name
+        assert tool.annotations.title, tool.name
+        assert tool.annotations.readOnlyHint is not None, tool.name
+        assert tool.annotations.destructiveHint is not None, tool.name
+    by_name = {t.name: t.annotations for t in tools}
+    assert by_name["train_model"].readOnlyHint is False
+    assert by_name["train_model"].destructiveHint is True
+    for name, ann in by_name.items():
+        if name != "train_model":
+            assert ann.readOnlyHint is True and ann.destructiveHint is False
