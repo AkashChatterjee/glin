@@ -81,6 +81,8 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 
 ## Tools exposed over MCP
 
+Every tool carries MCP annotations (title, `readOnlyHint`, `destructiveHint`): all are read-only except `train_model`, which is flagged destructive since `overwrite=True` replaces an existing model — so clients can auto-approve the former and confirm the latter.
+
 - `list_models()` — all trained models available.
 - `inspect_model(model_name)` — feature schema and target classes.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
