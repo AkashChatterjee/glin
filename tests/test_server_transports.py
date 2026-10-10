@@ -328,6 +328,32 @@ async def test_tune_model_hyperparameters_prompt_lists_live_knobs(models_root):
 
 
 @pytest.mark.asyncio
+async def test_build_classifier_prompt_is_self_contained_and_generic(models_root):
+    mcp = server.build_server(models_root=models_root)
+    prompts = {p.name: p for p in await mcp.list_prompts()}
+    assert {"build_classifier", "prepare_csv_for_training", "tune_model_hyperparameters"} <= set(prompts)
+    # every argument optional, so the user can invoke it with just a file path
+    assert not any(a.required for a in prompts["build_classifier"].arguments or [])
+
+    result = await mcp.get_prompt(
+        "build_classifier",
+        {"csv_path": "/data/x.csv", "target_column": "churn", "model_name": "churn_v1"},
+    )
+    text = result.messages[0].content.text
+    for needle in (
+        "/data/x.csv", "churn_v1",
+        "PHASE 1", "PHASE 2", "PHASE 3", "PHASE 4",
+        "target leakage", "list_hyperparameters", "holdout_fraction=0",
+        "random_state", "STOP",  # embedded prep checklist, tuning loop, early exit
+    ):
+        assert needle in text
+
+    # works with no arguments at all and tells the agent to ask for the data
+    blank = (await mcp.get_prompt("build_classifier", {})).messages[0].content.text
+    assert "ask the user where the data is" in blank
+
+
+@pytest.mark.asyncio
 async def test_streamable_http_real_mcp_client_round_trip(models_root):
     """End-to-end proof that a genuine MCP client (not a bespoke protocol)
     can connect over the network and call glin's tools — the actual
