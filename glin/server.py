@@ -112,9 +112,11 @@ def build_server(
         baseline rate, every contributing feature's exact score (sorted by
         magnitude), and an additivity check verifying the scores sum to the
         model's own predicted probability. `warnings` names inputs the model never
-        saw (unseen categories, numerics outside the training range); treat the
-        prediction as less reliable when present. `missing_features` lists
-        absent inputs, which are valid but worth mentioning."""
+        saw (unseen categories, numerics or dates outside the training range,
+        unparseable dates); treat the prediction as less reliable when present.
+        `missing_features` lists absent inputs, which are valid but worth
+        mentioning. Pass a date column as its raw value (e.g. "2024-03-06");
+        glin derives the `<col>__<part>` terms shown in `contributions` itself."""
         bundle = engine.load_bundle(_model_dir(model_name))
         return engine.explain_record(bundle, features, top_n=top_n)
 
@@ -175,11 +177,13 @@ def build_server(
         EBMTabularPreprocessor already does automatically (coercing dirty
         numeric formatting such as currency symbols, thousands separators and
         trailing % -- percentages stay in percentage points -- and treating
-        suppression codes as missing, dropping ID-like/constant/high-cardinality
-        columns, imputing missing values). If the CSV came from an
+        suppression codes as missing, expanding date/timestamp string columns
+        into year/month/day-of-week/hour/days-since-start features named
+        `<col>__<part>`, dropping ID-like/constant/high-cardinality columns,
+        imputing missing values). If the CSV came from an
         unfamiliar or messy source (wrong delimiter, banner rows before the
-        header, embedded JSON cells, date columns, a continuous-looking
-        target, etc.), work through the checklist in the `prepare_csv_for_training`
+        header, embedded JSON cells, dates stored as bare numbers, a
+        continuous-looking target, etc.), work through the checklist in the `prepare_csv_for_training`
         MCP prompt first (or the `build_classifier` prompt for the full
         prepare -> tune -> report workflow) -- those are judgment calls this
         tool does not make for you.
@@ -238,6 +242,7 @@ def build_server(
             "target_classes": bundle["target_classes"],
             "features_kept": preprocessor.output_columns_,
             "features_dropped": preprocessor.dropped_columns_,
+            "date_columns": preprocessor.date_feature_names_,
             "warnings": bundle["warnings"],
             "hyperparameters": bundle["hyperparameters"],
             "holdout_fraction": bundle["holdout_fraction"],

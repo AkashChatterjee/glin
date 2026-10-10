@@ -119,35 +119,6 @@ def _rule_target_looks_continuous(df: pd.DataFrame, target_column: str) -> Optio
     return None
 
 
-def _looks_like_datetime(series: pd.Series) -> bool:
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return True
-    if not (series.dtype == object or pd.api.types.is_string_dtype(series)):
-        return False
-    non_null = series.dropna()
-    if len(non_null) == 0:
-        return False
-    # A CSV never comes in pre-typed as datetime64 -- pandas reads dates as
-    # plain strings, so detecting the dtype alone (as opposed to attempting
-    # the parse) would never fire on real CSV input.
-    parsed = pd.to_datetime(non_null, errors="coerce", format="mixed")
-    return parsed.notna().mean() >= 0.8
-
-
-def _rule_datetime_columns_unsupported(df: pd.DataFrame, target_column: str) -> Optional[Issue]:
-    flagged = [
-        col for col in df.columns if col != target_column and _looks_like_datetime(df[col])
-    ]
-    if flagged:
-        return Issue(
-            "warning",
-            f"column(s) {flagged} look like dates — glin does not extract date "
-            "features yet, so any time-based signal is lost: each will either be "
-            "dropped (if high-cardinality) or treated as an opaque categorical label",
-        )
-    return None
-
-
 def _rule_list_or_dict_cells(df: pd.DataFrame, target_column: str) -> Optional[Issue]:
     flagged = [
         col
@@ -170,7 +141,6 @@ RULES: list[Rule] = [
     _rule_target_has_at_least_two_classes,
     _rule_target_missing_values,
     _rule_target_looks_continuous,
-    _rule_datetime_columns_unsupported,
     _rule_list_or_dict_cells,
 ]
 

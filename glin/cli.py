@@ -69,6 +69,11 @@ def train(csv_path: str, target: str, name: str, quiet: bool) -> None:
     if not quiet:
         click.echo()  # close out the in-place progress line
 
+    if bundle["preprocessor"].warnings_:
+        click.echo("Preprocessing warnings:")
+        for message in bundle["preprocessor"].warnings_:
+            click.echo(f"  - {message}")
+
     click.echo("Saving model...")
     model_dir = engine.save_bundle(bundle, DEFAULT_MODELS_ROOT)
 
@@ -79,7 +84,8 @@ def train(csv_path: str, target: str, name: str, quiet: bool) -> None:
     click.echo(
         f"  Features kept:    {len(preprocessor.output_columns_)} "
         f"({len(preprocessor.numeric_columns_)} numeric, "
-        f"{len(preprocessor.categorical_columns_)} categorical)"
+        f"{len(preprocessor.categorical_columns_)} categorical, "
+        f"{sum(map(len, preprocessor.date_feature_names_.values()))} from dates)"
     )
     click.echo(f"  Features dropped: {dropped}")
 
@@ -97,7 +103,12 @@ def list_cmd() -> None:
         if not metadata_path.exists():
             continue
         meta = engine.load_metadata(model_dir)
-        n_features = len(meta["features"]["numeric"]) + len(meta["features"]["categorical"])
+        features = meta["features"]
+        n_features = (
+            len(features["numeric"])
+            + len(features["categorical"])
+            + sum(len(d["features"]) for d in features.get("date", {}).values())
+        )
         rows.append(
             (
                 meta["model_name"],

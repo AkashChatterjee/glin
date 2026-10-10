@@ -482,3 +482,35 @@ async def test_csv_path_symlink_inside_allowed_dir_is_accepted(models_root, tmp_
     link.symlink_to(real)
     result = await _train_with_path(models_root, [allowed], link)
     assert result["model_name"] == "guarded"
+
+
+@pytest.mark.asyncio
+async def test_date_column_trains_inspects_and_predicts_over_mcp(models_root):
+    rng = np.random.RandomState(0)
+    days = pd.Timestamp("2021-01-01") + pd.to_timedelta(rng.randint(0, 700, 300), unit="D")
+    df = pd.DataFrame(
+        {
+            "signup_date": days.strftime("%Y-%m-%d"),
+            "churn": np.where(days.dayofweek >= 5, "Yes", "No"),
+        }
+    )
+    mcp = server.build_server(models_root=models_root)
+    _, trained = await mcp.call_tool(
+        "train_model",
+        {"csv_content": df.to_csv(index=False), "target_column": "churn", "model_name": "dated"},
+    )
+    derived = trained["date_columns"]["signup_date"]
+    assert "signup_date__day_of_week" in derived
+    assert trained["features_kept"] == derived
+    assert trained["features_dropped"] == []
+
+    _, meta = await mcp.call_tool("inspect_model", {"model_name": "dated"})
+    assert meta["features"]["date"]["signup_date"]["features"] == derived
+
+    _, result = await mcp.call_tool(
+        "predict", {"model_name": "dated", "features": {"signup_date": "2021-03-06"}}
+    )
+    assert result["predicted_class"] == "Yes"
+    assert result["additivity_verified"] is True
+    assert result["contributions"][0]["feature"] == "signup_date__day_of_week"
+    assert result["contributions"][0]["value"] == "sat"
