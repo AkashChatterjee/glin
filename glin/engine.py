@@ -558,10 +558,10 @@ def _shape_summary(global_data: dict[str, Any], top_k: int = 3) -> dict[str, Any
             "lowest": pick(order[:top_k]),
         }
     # continuous: len(names) == len(scores) + 1 bin edges
-    lo = global_data.get("lower_bounds", names[:-1])
-    hi = global_data.get("upper_bounds", names[1:])
+    # interpret's lower_bounds/upper_bounds are score confidence bounds, not bin edges.
+    edges = [float(e) for e in names]
     imax, imin = int(np.argmax(scores)), int(np.argmin(scores))
-    at = lambda i: f"[{float(lo[i]):.4g}, {float(hi[i]):.4g}]"
+    at = lambda i: f"[{edges[i]:.4g}, {edges[i + 1]:.4g}]"
     return {
         "kind": "continuous",
         "highest": {"range": at(imax), "score": round(float(scores[imax]), 4)},

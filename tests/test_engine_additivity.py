@@ -236,6 +236,29 @@ def test_global_importance_ranks_the_real_drivers_first():
     assert shapes["num1"]["kind"] == "continuous"
 
 
+def test_continuous_shape_range_is_in_feature_units():
+    rng = np.random.RandomState(1)
+    n = 500
+    df = pd.DataFrame({"pct": np.round(rng.uniform(20, 100, n), 1), "noise": np.round(rng.normal(size=n), 1)})
+    df["label"] = np.where(df["pct"] + rng.normal(scale=10, size=n) > 60, "yes", "no")
+    bundle = engine.train_model(
+        df, "label", model_name="shape_units", hyperparameters={"interactions": 0, "outer_bags": 2}
+    )
+    out = engine.global_importance(bundle)
+    shape = next(t for t in out["terms"] if t["term"] == "pct")["shape"]
+    lo, hi = df["pct"].min(), df["pct"].max()
+
+    def bounds(rng_text):
+        a, b = (float(v) for v in rng_text.strip("[]").split(","))
+        return a, b
+
+    for key in ("highest", "lowest"):
+        a, b = bounds(shape[key]["range"])
+        assert lo <= a < b <= hi
+    # High pct pushes toward "yes", low pct toward "no".
+    assert bounds(shape["highest"]["range"])[0] > bounds(shape["lowest"]["range"])[0]
+
+
 def test_global_importance_works_for_multiclass_without_shapes():
     bundle = engine.train_model(
         _synthetic_multiclass_df(), "label", model_name="gi_mc",
