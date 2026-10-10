@@ -9,6 +9,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from glin import engine, server
+from tests.mcp_compat import call_structured
 
 ToolError = server.ToolError
 
@@ -27,10 +28,7 @@ def _train_fixture_model(models_root, model_name="server_test_model"):
     engine.save_bundle(bundle, models_root)
 
 
-async def _call(mcp, name, arguments):
-    """Structured tool result: mcp 1.x returns (content, structured), 2.x a CallToolResult."""
-    result = await mcp.call_tool(name, arguments)
-    return result[1] if isinstance(result, tuple) else result.structured_content
+_call = call_structured
 
 
 def _hint(annotations, camel_name):
@@ -496,7 +494,8 @@ async def test_date_column_trains_inspects_and_predicts_over_mcp(models_root):
         }
     )
     mcp = server.build_server(models_root=models_root)
-    _, trained = await mcp.call_tool(
+    trained = await _call(
+        mcp,
         "train_model",
         {"csv_content": df.to_csv(index=False), "target_column": "churn", "model_name": "dated"},
     )
@@ -505,11 +504,11 @@ async def test_date_column_trains_inspects_and_predicts_over_mcp(models_root):
     assert trained["features_kept"] == derived
     assert trained["features_dropped"] == []
 
-    _, meta = await mcp.call_tool("inspect_model", {"model_name": "dated"})
+    meta = await _call(mcp, "inspect_model", {"model_name": "dated"})
     assert meta["features"]["date"]["signup_date"]["features"] == derived
 
-    _, result = await mcp.call_tool(
-        "predict", {"model_name": "dated", "features": {"signup_date": "2021-03-06"}}
+    result = await _call(
+        mcp, "predict", {"model_name": "dated", "features": {"signup_date": "2021-03-06"}}
     )
     assert result["predicted_class"] == "Yes"
     assert result["additivity_verified"] is True

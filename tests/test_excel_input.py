@@ -2,17 +2,20 @@ import sys
 
 import pytest
 from click.testing import CliRunner
-from mcp.server.fastmcp.exceptions import ToolError
 
 from glin import cli, engine, server
 from tests.excel_helpers import churn_rows, make_workbook, messy_churn_sheet
+from tests.mcp_compat import call_structured, input_schema
 
 pytest.importorskip("openpyxl")
+
+ToolError = server.ToolError
 
 
 def _train(models_root, allowed, path, **extra):
     mcp = server.build_server(models_root=models_root, allowed_dirs=allowed)
-    return mcp.call_tool(
+    return call_structured(
+        mcp,
         "train_model",
         {"csv_path": str(path), "target_column": "churn", "model_name": "xl", **extra},
     )
@@ -25,7 +28,7 @@ def messy_xlsx(tmp_path):
 
 @pytest.mark.asyncio
 async def test_train_model_reads_messy_xlsx_via_csv_path(tmp_path, messy_xlsx):
-    _, result = await _train(tmp_path / "models", [tmp_path], messy_xlsx)
+    result = await _train(tmp_path / "models", [tmp_path], messy_xlsx)
     assert result["rows_read"] == 200
     assert result["sheet"] == "Data"
     assert result["header_rows"] == [4]
@@ -47,7 +50,7 @@ async def test_train_model_sheet_and_multi_row_header_options(tmp_path):
     with pytest.raises(ToolError, match="2 sheets"):
         await _train(models, [tmp_path], path)
 
-    _, result = await _train(
+    result = await _train(
         models, [tmp_path], path, sheet=2, header_rows="2-3", overwrite=True
     )
     assert result["sheet"] == "Data"
@@ -55,7 +58,7 @@ async def test_train_model_sheet_and_multi_row_header_options(tmp_path):
     assert result["rows_read"] == 200
     assert result["features_kept"] == ["Customer - age", "Customer - plan"]
 
-    _, result = await _train(
+    result = await _train(
         models, [tmp_path], path, sheet="Data", header_rows=[2, 3], overwrite=True
     )
     assert result["header_rows"] == [2, 3]
@@ -78,7 +81,7 @@ async def test_excel_path_obeys_allowed_dirs_and_symlink_rules(tmp_path, messy_x
 
     inside = allowed / "inside.xlsx"
     inside.write_bytes(messy_xlsx.read_bytes())
-    _, result = await _train(models, [allowed], inside)
+    result = await _train(models, [allowed], inside)
     assert result["rows_read"] == 200
 
 
@@ -119,7 +122,7 @@ async def test_missing_excel_extra_surfaces_install_hint(tmp_path, messy_xlsx, m
 async def test_train_model_schema_documents_excel_options(tmp_path):
     mcp = server.build_server(models_root=tmp_path, allowed_dirs=[tmp_path])
     tool = next(t for t in await mcp.list_tools() if t.name == "train_model")
-    props = tool.inputSchema["properties"]
+    props = input_schema(tool)["properties"]
     assert "sheet" in props and "header_rows" in props
     assert "csv_path" in props
 
