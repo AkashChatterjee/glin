@@ -74,14 +74,13 @@ def test_binary_numeric_target_has_no_target_shape_warning():
     assert not any("flag" in i.message for i in result.warnings)
 
 
-def test_datetime_column_is_a_warning():
-    # As strings, matching how pandas actually reads a CSV date column --
-    # pd.read_csv never infers datetime64 dtype on its own.
+def test_date_column_is_supported_and_not_flagged():
+    # As strings, matching how pandas actually reads a CSV date column.
     df = _base_df()
     df["signup_date"] = pd.date_range("2020-01-01", periods=len(df)).astype(str)
     result = validate_dataset(df, "churn")
     assert result.is_valid
-    assert any("signup_date" in i.message for i in result.warnings)
+    assert not any("signup_date" in i.message for i in result.issues)
 
 
 def test_dirty_numeric_string_column_is_not_mistaken_for_a_date():

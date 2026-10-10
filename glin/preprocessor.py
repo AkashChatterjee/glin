@@ -10,7 +10,9 @@ total with a few blank rows for new customers) is exempted from cardinality
 unique its values are. A genuine identifier stored as a *native* numeric
 dtype (a sequential passenger index, read by pandas as a clean int64 column)
 is still caught by the unique-ratio rule, since it never needed coercion in
-the first place. See tests/test_preprocessor.py for the exact per-column
+the first place. Date columns (string columns of full calendar dates) are
+recognized before any of those checks, since a date column is usually unique
+per row and would otherwise be dropped as an identifier. See tests/test_preprocessor.py for the exact per-column
 -type cases this ordering is designed to satisfy.
 """
 from __future__ import annotations
@@ -22,6 +24,15 @@ import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
+
+from glin.dates import (
+    DATE_PARTS,
+    date_shaped,
+    derive_parts,
+    derived_name,
+    detect_dayfirst,
+    parse_dates,
+)
 
 CONTINUOUS = "continuous"
 NOMINAL = "nominal"
@@ -55,6 +66,15 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
     case-insensitively, ignoring surrounding whitespace) become missing.
     Categorical columns are left untouched, so a code like ``NE`` is only
     treated as missing where the rest of the column is numeric.
+
+    String columns whose values are full calendar dates (``2020-01-31``,
+    ``01/31/2020``, ``31 Jan 2020``, optionally with a time) become the named
+    features ``<col>__year``, ``__month``, ``__day_of_week``, ``__hour`` and
+    ``__days_since_start`` (whole days since the earliest training date);
+    parts that are constant in training are dropped. Numeric columns are never
+    read as dates, so years, IDs and epoch timestamps stay numbers. Day/month
+    order is inferred from the values (a field above 12); with no evidence it
+    is assumed month-first and a warning is recorded.
     """
 
     def __init__(
@@ -65,6 +85,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         missing_token: str = "__missing__",
         min_rows_for_id_check: int = 50,
         suppression_codes: Sequence[str] = DEFAULT_SUPPRESSION_CODES,
+        date_parse_threshold: float = 0.80,
     ):
         self.id_column_threshold = id_column_threshold
         self.max_categorical_cardinality = max_categorical_cardinality
@@ -72,6 +93,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         self.missing_token = missing_token
         self.min_rows_for_id_check = min_rows_for_id_check
         self.suppression_codes = suppression_codes
+        self.date_parse_threshold = date_parse_threshold
 
     def fit(self, X: pd.DataFrame, y=None) -> "EBMTabularPreprocessor":
         X = pd.DataFrame(X)
@@ -82,6 +104,13 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         self.warnings_: list[str] = []
         numeric_cols: list[str] = []
         categorical_cols: list[str] = []
+        self.date_columns_: list[str] = []
+        self.date_dayfirst_: dict[str, bool] = {}
+        self.date_references_: dict[str, pd.Timestamp] = {}
+        self.date_ranges_: dict[str, tuple[pd.Timestamp, pd.Timestamp]] = {}
+        self.date_feature_names_: dict[str, list[str]] = {}
+        date_vocab: dict[str, set[str]] = {}
+        date_types: dict[str, str] = {}
 
         for col in X.columns:
             series = X[col]
@@ -90,6 +119,17 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             if n_unique <= 1:
                 dropped.append(col)
                 continue
+
+            # Before the numeric/ID checks: a date column is typically unique
+            # per row and must not be dropped as an identifier.
+            if not pd.api.types.is_numeric_dtype(series):
+                dayfirst = self._detect_date_column(col, series)
+                if dayfirst is not None:
+                    if self._fit_date_column(col, series, dayfirst, date_vocab, date_types):
+                        self.date_columns_.append(col)
+                    else:
+                        dropped.append(col)
+                    continue
 
             is_id_like = (
                 n_rows > self.min_rows_for_id_check
@@ -126,12 +166,14 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         self.dropped_columns_ = dropped
         self.numeric_columns_ = numeric_cols
         self.categorical_columns_ = categorical_cols
-        self.output_columns_ = numeric_cols + categorical_cols
+        date_cols = [n for names in self.date_feature_names_.values() for n in names]
+        self.output_columns_ = numeric_cols + categorical_cols + date_cols
 
         self.categorical_vocab_ = {
             col: set(self._clean_categorical(X[col]).unique()) | {self.missing_token}
             for col in categorical_cols
         }
+        self.categorical_vocab_.update(date_vocab)
 
         self.numeric_ranges_ = {}
         for col in numeric_cols:
@@ -141,6 +183,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
 
         self.feature_types_ = {col: CONTINUOUS for col in numeric_cols}
         self.feature_types_.update({col: NOMINAL for col in categorical_cols})
+        self.feature_types_.update(date_types)
 
         return self
 
@@ -170,6 +213,11 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                 out[col] = cleaned.where(cleaned.isin(vocab), self.missing_token)
             else:
                 out[col] = self.missing_token
+
+        for col in getattr(self, "date_columns_", []):
+            parts = self._date_parts(X[col] if col in X.columns else None, col, X.index)
+            for name, values in parts.items():
+                out[name] = values
 
         return out[self.output_columns_]
 
@@ -216,13 +264,129 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                     {"feature": col, "value": record[col], "issue": "unseen_category"}
                 )
 
+        for col in getattr(self, "date_columns_", []):
+            self._check_date_input(col, record, frame, warnings, missing)
+
         return {"warnings": warnings, "missing_features": missing}
+
+    def _check_date_input(
+        self, col: str, record: dict, frame: pd.DataFrame, warnings: list, missing: list
+    ) -> None:
+        if col not in frame.columns:
+            missing.append(col)
+            return
+        date = parse_dates(frame[col], self.date_dayfirst_[col]).iloc[0]
+        if pd.isna(date):
+            missing.append(col)
+            if not self._is_blank(frame[col].iloc[0]):
+                warnings.append(
+                    {"feature": col, "value": record[col], "issue": "unparseable_date"}
+                )
+            return
+        low, high = self.date_ranges_[col]
+        if date.normalize() < low or date.normalize() > high:
+            warnings.append(
+                {
+                    "feature": col,
+                    "value": record[col],
+                    "issue": "out_of_range",
+                    "training_range": [low.date().isoformat(), high.date().isoformat()],
+                }
+            )
+        parts = self._date_parts(frame[col], col, frame.index)
+        for name, values in parts.items():
+            if name in self.categorical_vocab_ and values.iloc[0] == self.missing_token:
+                warnings.append(
+                    {"feature": name, "value": record[col], "issue": "unseen_category"}
+                )
+
+    def _is_blank(self, value) -> bool:
+        return bool(pd.isna(value)) or str(value).strip().lower() in ("", "nan", "none")
 
     def get_feature_types(self) -> list[str]:
         """Ordered feature_types list matching output_columns_, for EBM's
         feature_types= kwarg (avoids EBM's own autodetection heuristics)."""
         check_is_fitted(self, "output_columns_")
         return [self.feature_types_[col] for col in self.output_columns_]
+
+    def _detect_date_column(self, col: str, series: pd.Series) -> bool | None:
+        """Day-first flag if ``col`` is a date column, else None.
+
+        Requires >= ``date_parse_threshold`` of the non-null values to both
+        have a full-date shape and parse; a few stragglers become missing.
+        """
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return False
+        non_null = series.dropna()
+        if non_null.empty or date_shaped(non_null).mean() < self.date_parse_threshold:
+            return None
+        dayfirst, problem = detect_dayfirst(non_null)
+        parsed = parse_dates(non_null, dayfirst)
+        if parsed.notna().mean() < self.date_parse_threshold:
+            return None
+        if problem:
+            self.warnings_.append(
+                f"date column '{col}' {problem}; parsing as month/day. Use ISO "
+                "dates (YYYY-MM-DD) to remove the ambiguity"
+            )
+        n_bad = int(parsed.isna().sum())
+        if n_bad:
+            self.warnings_.append(
+                f"date column '{col}' has {n_bad} value(s) that are not parseable "
+                "dates; they are treated as missing"
+            )
+        return dayfirst
+
+    def _fit_date_column(
+        self,
+        col: str,
+        series: pd.Series,
+        dayfirst: bool,
+        vocab: dict[str, set[str]],
+        types: dict[str, str],
+    ) -> bool:
+        """Learn the reference date and which derived parts vary. False if none do."""
+        dates = parse_dates(series, dayfirst)
+        valid = dates.dropna()
+        if valid.empty:
+            return False
+        reference = valid.min().normalize()
+        parts = derive_parts(dates, reference)
+        names: list[str] = []
+        for part in DATE_PARTS:
+            values = parts[part.suffix]
+            if values.nunique(dropna=True) <= 1:
+                continue
+            name = derived_name(col, part.suffix)
+            names.append(name)
+            types[name] = NOMINAL if part.nominal else CONTINUOUS
+            if part.nominal:
+                vocab[name] = set(values.dropna()) | {self.missing_token}
+        if not names:
+            return False
+        self.date_dayfirst_[col] = dayfirst
+        self.date_references_[col] = reference
+        self.date_ranges_[col] = (reference, valid.max().normalize())
+        self.date_feature_names_[col] = names
+        return True
+
+    def _date_parts(
+        self, series: pd.Series | None, col: str, index: pd.Index
+    ) -> dict[str, pd.Series]:
+        """Derived feature columns for ``col`` (all missing if the input lacks it)."""
+        if series is None:
+            dates = pd.Series(pd.NaT, index=index, dtype="datetime64[ns]")
+        else:
+            dates = parse_dates(series, self.date_dayfirst_[col])
+        parts = derive_parts(dates, self.date_references_[col])
+        out: dict[str, pd.Series] = {}
+        for name in self.date_feature_names_[col]:
+            values = parts[name[len(col) + 2 :]]
+            if name in self.categorical_vocab_:
+                values = values.fillna(self.missing_token)
+                values = values.where(values.isin(self.categorical_vocab_[name]), self.missing_token)
+            out[name] = values
+        return out
 
     def _detect_decimal_comma(self, col: str, series: pd.Series) -> bool:
         """True if the column uses the European convention (``1.234,56``).

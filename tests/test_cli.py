@@ -62,3 +62,29 @@ def test_delete_without_yes_prompts_and_confirms_on_yes(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert not (tmp_path / "cli_test_model").exists()
+
+
+def test_train_and_list_report_date_derived_features(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
+    rng = np.random.RandomState(0)
+    days = pd.Timestamp("2021-01-01") + pd.to_timedelta(rng.randint(0, 700, 200), unit="D")
+    csv = tmp_path / "d.csv"
+    pd.DataFrame(
+        {
+            "signup": days.strftime("%d/%m/%Y"),
+            "churn": np.where(days.dayofweek >= 5, "Yes", "No"),
+        }
+    ).to_csv(csv, index=False)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main, ["train", str(csv), "--target", "churn", "--name", "m", "--quiet"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "from dates" in result.output
+    assert "Features dropped: none" in result.output
+
+    listed = runner.invoke(cli.main, ["list"])
+    assert listed.exit_code == 0
+    meta = engine.load_metadata(tmp_path / "models" / "m")
+    assert str(len(meta["features"]["date"]["signup"]["features"])) in listed.output

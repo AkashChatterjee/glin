@@ -131,6 +131,10 @@ def train_model(
     ``suppression_codes`` overrides which tokens count as missing in numeric
     columns (default: glin.preprocessor.DEFAULT_SUPPRESSION_CODES).
 
+    String date/timestamp columns are expanded into ``<col>__year``, ``__month``,
+    ``__day_of_week``, ``__hour`` and ``__days_since_start`` terms (see
+    glin.preprocessor); the raw column itself is not a model feature.
+
     ``on_progress``, if given, is invoked roughly every ``progress_interval``
     seconds as ``on_progress(best_log_loss_so_far, elapsed_seconds)``. EBM
     trains its bagged ensemble across parallel worker processes, each with
@@ -299,6 +303,13 @@ def save_bundle(bundle: dict[str, Any], models_root: Path) -> Path:
         "features": {
             "numeric": preprocessor.numeric_columns_,
             "categorical": preprocessor.categorical_columns_,
+            "date": {
+                col: {
+                    "features": preprocessor.date_feature_names_[col],
+                    "start_date": preprocessor.date_references_[col].date().isoformat(),
+                }
+                for col in getattr(preprocessor, "date_columns_", [])
+            },
         },
         "dropped_columns": preprocessor.dropped_columns_,
         "hyperparameters": {
@@ -336,8 +347,22 @@ def predict_record(bundle: dict[str, Any], features: dict[str, Any]) -> dict[str
     }
 
 
+def _derived_values(preprocessor: Any, row: pd.Series) -> dict[str, Any]:
+    """Values the preprocessor derived from raw inputs (e.g. ``signup_date__month``),
+    which have no entry in the caller's own ``features``."""
+    names = [n for ns in getattr(preprocessor, "date_feature_names_", {}).values() for n in ns]
+    values = {n: _to_native(row[n]) for n in names}
+    return {n: _plain_number(v) for n, v in values.items()}
+
+
+def _plain_number(value: Any) -> Any:
+    if isinstance(value, float):
+        return None if np.isnan(value) else int(value) if value.is_integer() else value
+    return value
+
+
 def _term_contributions(
-    model: ExplainableBoostingClassifier, data: dict, features: dict[str, Any]
+    model: ExplainableBoostingClassifier, data: dict, features: dict[str, Any], derived: dict[str, Any]
 ) -> list[dict[str, Any]]:
     feature_names_in = list(model.feature_names_in_)
     contributions = []
@@ -345,9 +370,8 @@ def _term_contributions(
     for i, term_idx_tuple in enumerate(model.term_features_):
         is_interaction = len(term_idx_tuple) > 1
         involved = [feature_names_in[idx] for idx in term_idx_tuple]
-        raw_value = (
-            [features.get(f) for f in involved] if is_interaction else features.get(involved[0])
-        )
+        values = [derived[f] if f in derived else features.get(f) for f in involved]
+        raw_value = values if is_interaction else values[0]
         contributions.append(
             {
                 "feature": " & ".join(involved),
@@ -374,7 +398,9 @@ def explain_record(
 
     X = preprocessor.transform(features)
     data = model.explain_local(X).data(0)
-    contributions = _term_contributions(model, data, features)
+    contributions = _term_contributions(
+        model, data, features, _derived_values(preprocessor, X.iloc[0])
+    )
     proba = model.predict_proba(X)[0]
     intercept = np.asarray(model.intercept_, dtype=float)
     predicted_class = target_classes[int(np.argmax(proba))]

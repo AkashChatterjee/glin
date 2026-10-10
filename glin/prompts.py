@@ -76,6 +76,16 @@ def prep_checklist(target_column: str = "") -> str:
      `warnings` say a numeric column has other repeated code-like values,
      confirm with the user what they mean, then pass them via the
      `suppression_codes` argument (a list replaces the default set).
+   - Date/timestamp string columns (2020-01-31, 01/31/2020, 31 Jan 2020,
+     optionally with a time) are expanded automatically into named
+     features: <col>__year, __month, __day_of_week, __hour (only if the
+     time of day varies) and __days_since_start; parts that never vary
+     are dropped. Don't pre-split them, and don't drop date columns as
+     "raw dates". Prefer ISO dates: with dd/mm vs mm/dd and no value
+     above 12 to settle it, glin assumes month-first and warns. Values
+     that don't parse as dates become missing (also warned).
+     Judge dates for leakage like any other column (post-event dates
+     leak the outcome).
    - Missing values are imputed (numeric -> passed through as a native
      missing bin; categorical -> an explicit "{defaults.missing_token}"
      category).
@@ -91,11 +101,10 @@ def prep_checklist(target_column: str = "") -> str:
 
 5. Fix what glin's preprocessor does NOT handle -- these need your
    judgment before the CSV goes into train_model:
-   - Date/datetime-looking columns are never parsed into features; they
-     fall through to being treated as opaque categorical text (and are
-     often then dropped for high cardinality, losing all signal). If a
-     date matters, engineer it yourself first -- e.g. split into
-     year, day-of-week, month, or a numeric "days since X" column.
+   - Dates stored as a bare number (a year, YYYYMMDD, epoch seconds) are
+     numbers to glin, not dates: an epoch or YYYYMMDD column is binned as
+     a meaningless continuous value. If it matters, convert it to a
+     real date string (YYYY-MM-DD) first, or engineer year/month/etc.
    - List/dict-valued cells (e.g. a JSON blob or embedded array in a
      cell) are treated as opaque text, not expanded. If there's signal in
      there, flatten it into real columns yourself (one-hot flags, counts,
@@ -138,12 +147,14 @@ Also drop:
    - Identifiers and names (record IDs, titles, person names, reference \
 numbers). glin only removes the near-unique ones automatically; a name with \
 a few repeats can slip through and be memorized.
-   - Free-text and very long columns; raw dates (derive year/month first).
+   - Free-text and very long columns. Date columns are fine to keep (glin \
+extracts year/month/day-of-week/hour/days-since-start itself) unless the date \
+is recorded after the outcome.
    - Duplicate columns that say the same thing in several ways.
    - Columns you can't explain and that are nearly unique per row.
 
 Keep the legitimate predictors: categoricals (type, region, category), \
-numerics, booleans, and sensible engineered fields (year from a date). If \
+numerics, booleans, date columns, and sensible engineered fields. If \
 you're genuinely unsure whether a column leaks, train once with it and once \
 without -- a large jump from including it is a red flag, not good news.
 
@@ -302,7 +313,7 @@ model.
 === PHASE 4: report ===
 Give the user a short, honest summary:
    - What you dropped and why (especially leakage decisions), and anything you \
-engineered (e.g. year from a date).
+engineered.
    - The trial table: config -> holdout log_loss, train_log_loss, \
 balanced_accuracy, roc_auc, seconds; with baseline_log_loss for reference.
    - The chosen hyperparameters and why they won over simpler alternatives.
