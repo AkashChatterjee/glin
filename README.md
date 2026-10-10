@@ -145,7 +145,7 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 
 | Data shape | What happens |
 |---|---|
-| Numeric (int/float), including `NaN` | Passed through as-is; EBM natively bins missing values into their own split. |
+| Numeric (int/float), including `NaN` | Passed through as-is; EBM natively bins missing values into their own split. Kept even when nearly every value is distinct, as long as some value repeats or the values are fractional (e.g. rupee amounts, measurements). Only a column of all-distinct whole numbers (a row index, shuffled `1..N`, large unique IDs) is dropped as an identifier; see the row-identifiers line below. |
 | Dirty numeric strings (blanks, e.g. `" "` for a new customer's total charges) | Coerced to `float64` if ≥80% of non-null values parse as numbers; unparseable cells become `NaN`. |
 | Categorical strings, any cardinality up to 250 unique values | Standardized (lowercased, stripped) and one-hot-style binned by EBM; missing/unseen values map to a `__missing__` sentinel. |
 | Currency / thousands-separated strings (`$1,234.56`, `£1,234`, `€1.234,56`, `(1,234)`) | Currency symbols and whitespace are stripped, then the column is coerced as above. A decimal comma is used only when the column has unambiguous European values (`1.234,56`, `12,5`, `1.234.567`); a bare `1,234` is read as a thousands group. Columns mixing both conventions are parsed as US and a warning is returned. |
@@ -161,7 +161,8 @@ Worth knowing before you ask: any field you don't mention comes through as missi
 | Dates stored as bare numbers (year, `YYYYMMDD`, epoch seconds) | Treated as ordinary numerics, not dates. | A plain integer column can't be told apart from an ID or a count; convert it to a date string if it is one. |
 | Free text / natural language | Dropped once it exceeds 250 unique values; below that threshold it becomes a set of (almost certainly useless) categorical labels. | glin doesn't do NLP; a text column isn't a set of classes. |
 | Lists / dicts / nested JSON in a cell | Not parsed structurally; treated as an opaque string. | No structured extraction implemented. |
-| Row identifiers (sequential IDs, UUIDs, hashes) | Dropped intentionally — not a gap, this is by design. | IDs carry no predictive signal. |
+| Row identifiers (sequential IDs, UUIDs, hashes) | Dropped intentionally — not a gap, this is by design. Only checked above 50 rows. A numeric column is an identifier only if it is more than 95% unique, every value is a whole number and no value repeats; text columns more than 95% unique are dropped too. | IDs carry no predictive signal. |
+| Any dropped column (constant, identifier-like, more than 250 categories, date with no varying part) | Listed in `features_dropped`, and `train_model` returns a `warnings` entry naming the column and the reason (for numeric identifiers with a hint to round or bin the column if it is a real measurement). | So a drop is never silent. |
 
 **Target leakage check:**
 

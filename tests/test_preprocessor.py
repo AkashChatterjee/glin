@@ -23,20 +23,12 @@ def test_drops_native_numeric_id_column():
     assert "age" in pre.numeric_columns_
 
 
-def test_full_precision_continuous_column_is_dropped_as_id_like():
-    """Known, intentional limitation: a genuinely continuous numeric column
-    with essentially no repeated values (e.g. raw high-precision floats, as
-    opposed to real-world CSV data which almost always carries some rounding)
-    is indistinguishable from a sequential identifier by a pure uniqueness
-    check, and is dropped per the PRD's literal id-column rule. Real CSV
-    numeric columns (currency, ages, measurements) virtually always have
-    enough rounding to produce natural repeats and stay well under the
-    threshold — see test_dirty_numeric_object_column_survives_high_cardinality
-    for the case this is meant to handle."""
+def test_full_precision_continuous_column_is_kept():
     n = 200
     df = pd.DataFrame({"measurement": np.random.RandomState(0).normal(size=n)})
     pre = _fit(df)
-    assert "measurement" in pre.dropped_columns_
+    assert "measurement" in pre.numeric_columns_
+    assert pre.warnings_ == []
 
 
 def test_drops_string_id_column():
@@ -187,7 +179,7 @@ def test_missing_target_column_style_usage_preserves_native_nan():
 
 
 def _col(values, n=60):
-    return pd.DataFrame({"x": (values * n)[:n], "y": range(n)})
+    return pd.DataFrame({"x": (values * n)[:n], "y": [i % 7 for i in range(n)]})
 
 
 @pytest.mark.parametrize(
@@ -293,11 +285,11 @@ def test_percent_and_codes_predict_time_parity():
     assert pre.transform({"x": "44.98%"})["x"].iloc[0] == pytest.approx(44.98)
     assert np.isnan(pre.transform({"x": "SUPP"})["x"].iloc[0])
 
-    check = pre.check_inputs({"x": "NP"})
+    check = pre.check_inputs({"x": "NP", "y": 1})
     assert check["missing_features"] == ["x"] and check["warnings"] == []
-    check = pre.check_inputs({"x": "500%"})
+    check = pre.check_inputs({"x": "500%", "y": 1})
     assert [w["issue"] for w in check["warnings"]] == ["out_of_range"]
-    assert pre.check_inputs({"x": "30%"}) == {"warnings": [], "missing_features": []}
+    assert pre.check_inputs({"x": "30%", "y": 1}) == {"warnings": [], "missing_features": []}
 
 
 def test_custom_suppression_codes_replace_defaults():
@@ -348,7 +340,7 @@ def test_unrecognized_code_warning_is_quiet_when_codes_are_known():
 )
 def test_unrecognized_code_warning_ignores_non_code_like_leftovers(leftovers):
     numbers = [str(i) for i in range(100, 160)]
-    df = pd.DataFrame({"x": numbers + leftovers, "y": range(60 + len(leftovers))})
+    df = pd.DataFrame({"x": numbers + leftovers, "y": [i % 7 for i in range(60 + len(leftovers))]})
     pre = _fit(df)
     assert "x" in pre.numeric_columns_
     assert pre.warnings_ == []
@@ -358,3 +350,108 @@ def test_warning_does_not_fire_on_normal_categoricals():
     pre = _fit(_col(["red", "green", "blue", "N/A?", "red"]))
     assert "x" in pre.categorical_columns_
     assert pre.warnings_ == []
+
+
+N_ROWS = 563
+
+
+def _warning_for(pre: EBMTabularPreprocessor, col: str) -> str:
+    matches = [w for w in pre.warnings_ if f"'{col}'" in w]
+    assert len(matches) == 1, pre.warnings_
+    return matches[0]
+
+
+def test_integer_measurement_with_repeats_is_kept():
+    rng = np.random.RandomState(0)
+    values = rng.randint(0, 20000, size=N_ROWS)
+    assert 0.9 < len(set(values)) / N_ROWS < 1.0
+    pre = _fit(pd.DataFrame({"expenditure": values}))
+    assert "expenditure" in pre.numeric_columns_
+    assert pre.dropped_columns_ == []
+    assert pre.warnings_ == []
+
+
+def test_integer_measurement_with_missing_values_is_kept():
+    rng = np.random.RandomState(1)
+    values = rng.randint(0, 20000, size=N_ROWS).astype(float)
+    values[:10] = np.nan
+    pre = _fit(pd.DataFrame({"expenditure": values}))
+    assert "expenditure" in pre.numeric_columns_
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.arange(1, N_ROWS + 1),
+        np.random.RandomState(0).permutation(np.arange(1, N_ROWS + 1)),
+        np.arange(0, N_ROWS),
+        np.random.RandomState(0).randint(0, 10**9, size=N_ROWS),
+    ],
+    ids=["sequential", "shuffled", "zero_based", "large_unique"],
+)
+def test_distinct_integer_column_is_dropped_with_warning(values):
+    pre = _fit(pd.DataFrame({"row_id": values, "x": np.arange(N_ROWS) % 7}))
+    assert pre.dropped_columns_ == ["row_id"]
+    message = _warning_for(pre, "row_id")
+    assert "identifier" in message
+    assert "round or bin" in message
+
+
+def test_integer_id_with_missing_values_is_dropped():
+    values = np.arange(1, N_ROWS + 1).astype(float)
+    values[:5] = np.nan
+    pre = _fit(pd.DataFrame({"row_id": values}))
+    assert pre.dropped_columns_ == ["row_id"]
+
+
+def test_uuid_column_is_dropped_with_warning():
+    import uuid
+
+    ids = [str(uuid.UUID(int=i * 7919 + 12345)) for i in range(N_ROWS)]
+    pre = _fit(pd.DataFrame({"uid": ids}))
+    assert pre.dropped_columns_ == ["uid"]
+    assert "identifier" in _warning_for(pre, "uid")
+
+
+def test_constant_column_drop_is_warned():
+    pre = _fit(pd.DataFrame({"same": ["a"] * 100, "empty": [np.nan] * 100}))
+    assert set(pre.dropped_columns_) == {"same", "empty"}
+    assert "constant" in _warning_for(pre, "same")
+    assert "constant" in _warning_for(pre, "empty")
+
+
+def test_high_cardinality_drop_is_warned():
+    values = [f"note-{i}" for i in range(260)] * 2
+    pre = _fit(pd.DataFrame({"remarks": values}))
+    message = _warning_for(pre, "remarks")
+    assert "260" in message and "250" in message
+
+
+def test_dropped_date_column_is_warned():
+    pre = _fit(pd.DataFrame({"when": ["2024-03-06"] * 10 + ["2024-03-06 "] * 10}))
+    assert pre.dropped_columns_ == ["when"]
+    assert "date" in _warning_for(pre, "when")
+
+
+def test_kept_columns_produce_no_drop_warnings():
+    df = pd.DataFrame({"age": list(range(20, 70)) * 2, "plan": ["a", "b"] * 50})
+    assert _fit(df).warnings_ == []
+
+
+def test_train_model_forwards_drop_warnings_once():
+    from glin import engine
+
+    rng = np.random.RandomState(0)
+    df = pd.DataFrame(
+        {
+            "row_id": np.arange(200),
+            "same": ["a"] * 200,
+            "spend": rng.randint(0, 5000, size=200),
+            "x": rng.normal(size=200).round(1),
+        }
+    )
+    df["y"] = np.where(df["x"] + rng.normal(size=200) > 0, "yes", "no")
+    bundle = engine.train_model(df, "y", model_name="drops")
+    for col in ("row_id", "same"):
+        assert sum(f"'{col}'" in w for w in bundle["warnings"]) == 1
+    assert not any("'spend'" in w for w in bundle["warnings"])
