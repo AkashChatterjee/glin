@@ -105,3 +105,19 @@ def test_train_prints_leakage_warnings_and_still_succeeds(tmp_path, monkeypatch)
     assert "Leakage warnings:" in result.output
     assert "Possible target leakage: 'tox'" in result.output
     assert (tmp_path / "models" / "m" / engine.BUNDLE_FILENAME).exists()
+
+
+def test_serve_accepts_deprecated_mode_stdio(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
+
+    result = CliRunner().invoke(cli.main, ["serve", "--mode", "stdio"])
+
+    assert result.exit_code == 0
+    assert calls == [{"allowed_dirs": None}]
+
+
+def test_serve_rejects_unknown_mode():
+    result = CliRunner().invoke(cli.main, ["serve", "--mode", "http"])
+
+    assert result.exit_code != 0
