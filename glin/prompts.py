@@ -219,7 +219,12 @@ small or noisy data. Tuning is finding the flexibility the data can support.
 version of the table below.
 
 2. Establish a baseline: call `train_model` with NO `hyperparameters` and a \
-scratch name (e.g. "{name}_trial") with overwrite=True. Record from the \
+scratch name (e.g. "{name}_trial") with overwrite=True. If a column such as \
+state, region, site, customer or user id groups the rows (rows in one group \
+resemble each other), pass it as `holdout_group_column` here and in every \
+later trial: whole groups are held out, so the metrics reflect groups the \
+model has never seen, not a flattering random split. Keep it identical \
+across trials; check `evaluation.holdout_groups`/`train_groups`. Record from the \
 result's `evaluation` (and check its `warnings` for "Possible target \
 leakage" first -- drop flagged columns the user can't justify and re-run):
    - log_loss: your primary score; lower is better. Compare it against \
@@ -256,7 +261,8 @@ tunes you a little more to this one holdout set.
 model name ({name}), holdout_fraction=0 (train on every row) and \
 overwrite=True only if replacing an existing model. This final model has no \
 `evaluation` of its own -- report the holdout numbers from the winning \
-trial as its expected performance. Tell the user the chosen hyperparameters \
+trial as its expected performance (when you used `holdout_group_column`, say \
+so: that is the honest estimate for new groups). Tell the user the chosen hyperparameters \
 and the trial table (config -> log_loss, balanced_accuracy, seconds).
 
 Hyperparameters you can set:
@@ -323,7 +329,10 @@ values, target balance), then apply this checklist.
 Guardrails that apply to every trial:
    - Use a scratch model name ("{model_name or "scratch"}_trial") with \
 overwrite=True and the default holdout_fraction (0.2). The holdout split is \
-fixed, so trials are directly comparable. With under ~300 rows the holdout is \
+fixed, so trials are directly comparable. If a column such as state, region, \
+site, customer or user id groups the rows, pass it as `holdout_group_column` \
+in every trial so whole groups are held out; a random holdout is optimistic \
+on grouped data. With under ~300 rows the holdout is \
 tiny and noisy: use holdout_fraction 0.25-0.3, run fewer trials, and lean on \
 regularization (min_samples_leaf, reg_lambda, interactions=0) rather than \
 fine-grained search.
@@ -352,7 +361,9 @@ balanced_accuracy, roc_auc, seconds; with baseline_log_loss for reference.
    - The chosen hyperparameters and why they won over simpler alternatives.
    - Expected performance = the winning trial's HOLDOUT numbers (the final \
 model trained on all rows has no evaluation of its own), with the caveat that \
-it was selected on that holdout and so is slightly optimistic.
+it was selected on that holdout and so is slightly optimistic. If you used \
+`holdout_group_column`, report that holdout as the honest estimate for groups \
+the model has not seen, and name the column.
    - Which features mattered most: call `explain_model` on the final model for \
 the exact ranking, interaction terms, and per-feature shapes (don't \
 approximate it from a few `predict` calls), and any caveats (small data, \

@@ -30,6 +30,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, log_loss, r
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
+from glin.grouped_split import split_by_group
 from glin.hyperparameters import HYPERPARAMETERS, resolve_hyperparameters
 from glin.leakage import find_leaky_features, leakage_warnings
 from glin.preprocessor import DEFAULT_SUPPRESSION_CODES, NOMINAL, EBMTabularPreprocessor
@@ -106,6 +107,7 @@ def train_model(
     model_name: str,
     hyperparameters: Optional[dict[str, Any]] = None,
     holdout_fraction: float = 0.0,
+    holdout_group_column: Optional[str] = None,
     on_progress: Optional[Callable[[float, float], None]] = None,
     progress_interval: float = 1.0,
     suppression_codes: Optional[Sequence[str]] = None,
@@ -128,6 +130,14 @@ def train_model(
     internal validation split is used for early stopping and so isn't an
     unbiased score. With 0 the model trains on every row and
     ``evaluation`` is None.
+
+    ``holdout_group_column`` makes that holdout a group split: whole groups
+    (distinct values of the column, missing values as one group) are held out
+    until about ``holdout_fraction`` of the rows are, so the metrics measure
+    performance on groups the model never saw. The column stays a regular
+    feature. ``evaluation`` then also reports ``holdout_group_column``,
+    ``holdout_groups`` and ``train_groups``. Ignored, with a warning, when
+    ``holdout_fraction`` is 0. See glin.grouped_split.
 
     ``suppression_codes`` overrides which tokens count as missing in numeric
     columns (default: glin.preprocessor.DEFAULT_SUPPRESSION_CODES).
@@ -167,6 +177,23 @@ def train_model(
     target_classes = [_to_native(c) for c in label_encoder.classes_]
     n_classes = len(target_classes)
 
+    group_warnings: list[str] = []
+    group_split = None
+    if holdout_group_column is not None and holdout_fraction == 0:
+        group_warnings.append(
+            f"holdout_group_column '{holdout_group_column}' was ignored because "
+            "holdout_fraction is 0 (no holdout)"
+        )
+        holdout_group_column = None
+    if holdout_group_column is not None:
+        if holdout_group_column == target_column:
+            raise ValueError("holdout_group_column cannot be the target column")
+        if holdout_group_column not in X_raw.columns:
+            raise ValueError(
+                f"holdout_group_column '{holdout_group_column}' is not a column; "
+                f"available: {', '.join(map(str, X_raw.columns))}"
+            )
+
     X_holdout_raw = y_holdout = None
     if holdout_fraction > 0:
         n_holdout = int(round(len(df) * holdout_fraction))
@@ -177,15 +204,37 @@ def train_model(
                 f"least {MIN_HOLDOUT_ROWS} and {MIN_ROWS} respectively -- use a "
                 "different fraction or pass holdout_fraction=0 to train on all rows"
             )
-        # Stratify only when every class can appear on both sides of the split.
-        can_stratify = np.bincount(y).min() >= 2 and n_holdout >= n_classes
-        X_raw, X_holdout_raw, y, y_holdout = train_test_split(
-            X_raw,
-            y,
-            test_size=holdout_fraction,
-            random_state=HOLDOUT_SPLIT_SEED,
-            stratify=y if can_stratify else None,
-        )
+        if holdout_group_column is not None:
+            group_split = split_by_group(
+                X_raw[holdout_group_column],
+                y,
+                n_classes,
+                holdout_fraction,
+                HOLDOUT_SPLIT_SEED,
+                holdout_group_column,
+            )
+            n_holdout = len(group_split.holdout_idx)
+            if n_holdout < MIN_HOLDOUT_ROWS or len(group_split.train_idx) < MIN_ROWS:
+                raise ValueError(
+                    f"holding out whole '{holdout_group_column}' groups leaves "
+                    f"{n_holdout} holdout / {len(group_split.train_idx)} training "
+                    f"rows; need at least {MIN_HOLDOUT_ROWS} and {MIN_ROWS} "
+                    "respectively -- use a different fraction or a random holdout"
+                )
+            X_holdout_raw = X_raw.iloc[group_split.holdout_idx]
+            y_holdout = y[group_split.holdout_idx]
+            X_raw = X_raw.iloc[group_split.train_idx]
+            y = y[group_split.train_idx]
+        else:
+            # Stratify only when every class can appear on both sides of the split.
+            can_stratify = np.bincount(y).min() >= 2 and n_holdout >= n_classes
+            X_raw, X_holdout_raw, y, y_holdout = train_test_split(
+                X_raw,
+                y,
+                test_size=holdout_fraction,
+                random_state=HOLDOUT_SPLIT_SEED,
+                stratify=y if can_stratify else None,
+            )
 
     preprocessor = EBMTabularPreprocessor(
         suppression_codes=(
@@ -274,6 +323,10 @@ def train_model(
             log_loss(y, model.predict_proba(X), labels=list(range(n_classes)))
         )
         evaluation["holdout_rows"] = len(y_holdout)
+        if group_split is not None:
+            evaluation["holdout_group_column"] = holdout_group_column
+            evaluation["holdout_groups"] = group_split.holdout_groups
+            evaluation["train_groups"] = group_split.train_groups
 
     return {
         "model_name": model_name,
@@ -283,12 +336,14 @@ def train_model(
         "target_classes": target_classes,
         "hyperparameters": params,
         "holdout_fraction": holdout_fraction,
+        "holdout_group_column": holdout_group_column,
         "evaluation": evaluation,
         "training_rows": len(y),
         "training_seconds": training_seconds,
         "leakage_suspects": suspects,
         "leakage_warnings": leakage,
         "warnings": [issue.message for issue in validation.warnings]
+        + group_warnings
         + preprocessor.warnings_
         + leakage,
     }
@@ -336,6 +391,7 @@ def save_bundle(bundle: dict[str, Any], models_root: Path) -> Path:
             name: _to_native(getattr(model, name)) for name in HYPERPARAMETERS
         },
         "holdout_fraction": bundle.get("holdout_fraction", 0.0),
+        "holdout_group_column": bundle.get("holdout_group_column"),
         "evaluation": bundle.get("evaluation"),
         "training_rows": bundle.get("training_rows"),
         "training_seconds": bundle.get("training_seconds"),
