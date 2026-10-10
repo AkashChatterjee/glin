@@ -161,6 +161,7 @@ def build_server(
         overwrite: bool = False,
         hyperparameters: Optional[dict[str, Any]] = None,
         holdout_fraction: float = 0.2,
+        holdout_group_column: Optional[str] = None,
         suppression_codes: Optional[list[str]] = None,
         sheet: SheetRef = None,
         header_rows: HeaderRows = None,
@@ -222,6 +223,20 @@ def build_server(
         to fit on all the data (no evaluation is reported in that case). See
         the `tune_model_hyperparameters` prompt for the full loop.
 
+        Grouped holdout: rows in the same state, region, customer, site or
+        user tend to resemble each other, so a random holdout (which puts
+        siblings on both sides) gives optimistic metrics. If such a column
+        exists, pass it as `holdout_group_column`: whole groups are held out
+        until about `holdout_fraction` of the rows are, the rest train, and
+        `evaluation` measures performance on groups the model never saw
+        (also reporting `holdout_group_column`, `holdout_groups` and
+        `train_groups`). The column stays a normal feature, so unseen groups
+        exercise the unseen-category path. It must exist, not be the target,
+        have at least 5 distinct non-null groups (missing values count as one
+        group) and no group above half of the rows; otherwise the call is
+        rejected. Ignored, with a warning, when holdout_fraction is 0. Report
+        this holdout as the honest estimate of performance on new groups.
+
         `suppression_codes` lists the tokens treated as missing in otherwise
         numeric columns (case-insensitive, whitespace ignored); omit it for
         the default ["SUPP", "NE", "NP", "z"]. Passing a list replaces the
@@ -260,6 +275,7 @@ def build_server(
             model_name=model_name,
             hyperparameters=hyperparameters,
             holdout_fraction=holdout_fraction,
+            holdout_group_column=holdout_group_column,
             suppression_codes=suppression_codes,
         )
         engine.save_bundle(bundle, models_root)
@@ -277,6 +293,7 @@ def build_server(
             "warnings": bundle["warnings"],
             "hyperparameters": bundle["hyperparameters"],
             "holdout_fraction": bundle["holdout_fraction"],
+            "holdout_group_column": bundle["holdout_group_column"],
             "training_rows": bundle["training_rows"],
             "training_seconds": round(bundle["training_seconds"], 2),
             "terms": {
