@@ -9,11 +9,12 @@ total with a few blank rows for new customers) is exempted from cardinality
 -based dropping the moment it's recognized as mostly-numeric, no matter how
 unique its values are. A genuine identifier stored as a *native* numeric
 dtype (a sequential passenger index, read by pandas as a clean int64 column)
-is still caught by the unique-ratio rule, since it never needed coercion in
-the first place. Date columns (string columns of full calendar dates) are
-recognized before any of those checks, since a date column is usually unique
-per row and would otherwise be dropped as an identifier. See tests/test_preprocessor.py for the exact per-column
--type cases this ordering is designed to satisfy.
+is caught when the column is highly unique and every value is a distinct
+integer; repeated values or fractions mark a measurement, which is kept. Date
+columns (string columns of full calendar dates) are recognized before any of
+those checks, since a date column is usually unique per row and would otherwise
+be dropped as an identifier. Every dropped column adds a reason to ``warnings_``.
+See tests/test_preprocessor.py for the per-column-type cases.
 """
 from __future__ import annotations
 
@@ -38,6 +39,10 @@ CONTINUOUS = "continuous"
 NOMINAL = "nominal"
 
 DEFAULT_SUPPRESSION_CODES = ("SUPP", "NE", "NP", "z")
+
+KEEP_HINT = (
+    "If it is a real measurement, round or bin it so values repeat and it is kept."
+)
 
 _SYMBOL_RE = re.compile(r"[$€£¥₹₩₽₺₪฿\s\u00a0]|%(?=\)?\s*$)")
 _PAREN_NEG_RE = re.compile(r"^\((.*)\)$")
@@ -117,7 +122,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             n_unique = series.nunique(dropna=True)
 
             if n_unique <= 1:
-                dropped.append(col)
+                self._drop(dropped, col, "it is constant (at most one distinct value)")
                 continue
 
             # Before the numeric/ID checks: a date column is typically unique
@@ -128,7 +133,12 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                     if self._fit_date_column(col, series, dayfirst, date_vocab, date_types):
                         self.date_columns_.append(col)
                     else:
-                        dropped.append(col)
+                        self._drop(
+                            dropped,
+                            col,
+                            "it is a date column whose derived parts (year, month, "
+                            "day of week, hour, days since start) never vary",
+                        )
                     continue
 
             is_id_like = (
@@ -137,11 +147,16 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             )
 
             if pd.api.types.is_numeric_dtype(series):
-                # Already a clean numeric dtype: a high unique-ratio here means
-                # a genuine sequential/identifier column, not a dirty numeric
-                # feature (those only reach this branch via object dtype below).
-                if is_id_like:
-                    dropped.append(col)
+                # Native numerics are identifiers only when every value is a
+                # distinct integer; repeats or fractions mean a measurement.
+                if is_id_like and self._all_distinct_integers(series):
+                    self._drop(
+                        dropped,
+                        col,
+                        "it looks like a row identifier (every value is a distinct "
+                        "integer)",
+                        KEEP_HINT,
+                    )
                     continue
                 numeric_cols.append(col)
                 continue
@@ -157,8 +172,21 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                 numeric_cols.append(col)
                 continue
 
-            if is_id_like or n_unique > self.max_categorical_cardinality:
-                dropped.append(col)
+            if is_id_like:
+                self._drop(
+                    dropped,
+                    col,
+                    f"it looks like an identifier (>{self.id_column_threshold:.0%} "
+                    "of rows have a unique value)",
+                )
+                continue
+            if n_unique > self.max_categorical_cardinality:
+                self._drop(
+                    dropped,
+                    col,
+                    f"it has {n_unique} distinct values, above the "
+                    f"{self.max_categorical_cardinality} categorical limit",
+                )
                 continue
 
             categorical_cols.append(col)
@@ -186,6 +214,20 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         self.feature_types_.update(date_types)
 
         return self
+
+    def _drop(
+        self, dropped: list[str], col: str, reason: str, hint: str = ""
+    ) -> None:
+        dropped.append(col)
+        message = f"Dropped column '{col}': {reason}."
+        self.warnings_.append(f"{message} {hint}" if hint else message)
+
+    @staticmethod
+    def _all_distinct_integers(series: pd.Series) -> bool:
+        values = series.dropna()
+        if values.nunique() != len(values):
+            return False
+        return bool((values == np.floor(values)).all())
 
     def transform(self, X: pd.DataFrame | dict) -> pd.DataFrame:
         check_is_fitted(self, "output_columns_")

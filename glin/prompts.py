@@ -103,13 +103,16 @@ def prep_checklist(target_column: str = "") -> str:
    - Missing values are imputed (numeric -> passed through as a native
      missing bin; categorical -> an explicit "{defaults.missing_token}"
      category).
-   - ID-like columns (>{defaults.id_column_threshold:.0%} unique values,
-     only checked once a dataset has >{defaults.min_rows_for_id_check}
-     rows) are dropped automatically, as are constant columns. Beware the
-     flip side: a genuine continuous column that is almost all-unique
-     (e.g. a salary in a small sample) is dropped too. Check
-     `features_dropped` after training, and if a column that matters was
-     dropped, round or bin it so its unique ratio falls below the threshold.
+   - ID-like columns are dropped automatically, as are constant columns.
+     A numeric column counts as an ID only when it is >{defaults.id_column_threshold:.0%}
+     unique, holds only whole numbers and has no repeated value at all
+     (a row index or shuffled 1..N), and only once a dataset has
+     >{defaults.min_rows_for_id_check} rows; a column with repeated
+     values, or any float column, is kept as a measurement. Text columns
+     that are >{defaults.id_column_threshold:.0%} unique are dropped.
+     Every dropped column is named, with the reason, in the `warnings`
+     returned by train_model (and listed in `features_dropped`). If a
+     column that matters was dropped, round or bin it so values repeat.
    - High-cardinality categoricals (>{defaults.max_categorical_cardinality}
      distinct values) are dropped automatically.
 
