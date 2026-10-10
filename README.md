@@ -2,6 +2,8 @@
 
 ☕ If glin is useful to you and you want to help maintain it, you can [buy me a coffee](https://buymeacoffee.com/akashchatterjee).
 
+<!-- mcp-name: io.github.AkashChatterjee/glin -->
+
 glin is a CLI tool and Python library. It gives AI agents a fast, statistical "gut feeling" (System 1 thinking).
 
 glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a CSV. It then gives the model to LLM agents through [MCP](https://modelcontextprotocol.io/), locally over stdio. Each prediction comes with an exact breakdown of the features that drove it. The breakdown comes from the additive structure of the model. It is not a SHAP or LIME approximation.
@@ -13,6 +15,8 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
 ## Contents
 
 - [Install](#install)
+  - [Install as a Claude Code plugin](#install-as-a-claude-code-plugin)
+  - [MCP Registry](#mcp-registry)
   - [Install for development](#install-for-development)
 - [Train a model](#train-a-model)
   - [List and delete models](#list-and-delete-models)
@@ -53,6 +57,23 @@ Then check the install:
 ```bash
 glin --help
 ```
+
+### Install as a Claude Code plugin
+
+The plugin adds the glin MCP server and a skill. The skill tells the agent when and how to build, tune, predict with and explain a model. The plugin starts the server with [`uvx`](https://docs.astral.sh/uv/), so you must have `uv` installed. You do not need to install glin first.
+
+In Claude Code, run:
+
+```text
+/plugin marketplace add AkashChatterjee/glin
+/plugin install glin@glin-marketplace
+```
+
+The files are in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and [`plugins/glin/`](plugins/glin/).
+
+### MCP Registry
+
+The [official MCP Registry](https://registry.modelcontextprotocol.io) lists glin as `io.github.AkashChatterjee/glin`. The metadata is in [`server.json`](server.json). The registry points to the `glin-ml` package on PyPI. The package also installs a `glin-ml` command, which is the same as `glin`, so `uvx glin-ml serve` works.
 
 ### Install for development
 
@@ -340,6 +361,23 @@ The workflow publishes through PyPI [trusted publishing](https://docs.pypi.org/t
 2. **PyPI → Account settings → API tokens:** delete every API token that can upload `glin-ml`. Do not create new tokens. With no tokens and 2FA on, the only credential that can publish is the short-lived OIDC identity of the workflow. Also review the collaborators of the project. Remove anyone who does not need upload rights.
 3. **GitHub → Settings → Rules → Rulesets:** add a tag ruleset for `v*`. Restrict who can create tags, and block deleting or moving them. A new matching tag starts a release.
 4. **GitHub → Settings → Environments → `pypi`:** add required reviewers. Every release then needs a manual approval before the upload step runs.
+
+### Publishing to the MCP Registry
+
+The registry holds metadata only. It checks that the PyPI package has the line `mcp-name: io.github.AkashChatterjee/glin` in its README. The README has this line as a hidden comment. Publish to PyPI first, then to the registry:
+
+1. Release the new version on PyPI (see above).
+2. In `server.json`, set `version` and `packages[0].version` to the released version.
+3. Run these commands from the repository root:
+
+```bash
+mcp-publisher login github
+mcp-publisher publish
+```
+
+4. Check the result: `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.AkashChatterjee/glin"`.
+
+The registry rejects a version that already exists. Update `server.json` for each release.
 
 ### Checking a release
 

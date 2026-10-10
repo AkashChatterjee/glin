@@ -1,0 +1,17 @@
+{
+  "name": "glin-marketplace",
+  "description": "Plugins for glin, the explainable classifier MCP server.",
+  "owner": {
+    "name": "Akash Chatterjee",
+    "email": "akashc2310@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "glin",
+      "source": "./plugins/glin",
+      "description": "Train, tune, predict with and explain exactly-explainable classifiers over MCP.",
+      "category": "data",
+      "tags": ["mcp", "explainable-ai", "machine-learning"]
+    }
+  ]
+}
