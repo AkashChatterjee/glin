@@ -48,6 +48,7 @@ dev = [
 
 [project.scripts]
 glin = "glin.cli:main"
+glin-ml = "glin.cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

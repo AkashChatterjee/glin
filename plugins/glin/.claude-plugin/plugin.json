@@ -1,0 +1,13 @@
+{
+  "name": "glin",
+  "displayName": "glin",
+  "description": "Train, tune, predict with and explain exactly-explainable classifiers on CSV or Excel data, over a local MCP server.",
+  "author": {
+    "name": "Akash Chatterjee",
+    "email": "akashc2310@gmail.com"
+  },
+  "homepage": "https://github.com/AkashChatterjee/glin",
+  "repository": "https://github.com/AkashChatterjee/glin",
+  "license": "MIT",
+  "keywords": ["mcp", "explainable-ai", "ebm", "machine-learning", "classification"]
+}
