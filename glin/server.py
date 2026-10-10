@@ -1,17 +1,24 @@
 """Local stdio MCP server exposing glin's tools and prompts."""
 from __future__ import annotations
 
+import functools
 import io
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
-from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from glin import engine, prompts
 from glin.engine import DEFAULT_MODELS_ROOT
 from glin.hyperparameters import HYPERPARAMETERS
+
+try:  # mcp 2.x
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as MCPServer
+    from mcp.server.fastmcp.exceptions import ToolError
 
 
 def default_allowed_dirs() -> list[Path]:
@@ -57,9 +64,23 @@ _TRAIN_ANNOTATIONS = ToolAnnotations(
 def build_server(
     models_root: Path = DEFAULT_MODELS_ROOT,
     allowed_dirs: Optional[list[Path]] = None,
-) -> FastMCP:
+) -> MCPServer:
     allowed = list(allowed_dirs) if allowed_dirs else default_allowed_dirs()
-    mcp = FastMCP("glin")
+    mcp = MCPServer("glin")
+
+    def tool(annotations: ToolAnnotations):
+        # mcp 2.x hides non-ToolError messages from clients; ours are meant for the agent.
+        def register(fn):
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                try:
+                    return fn(*args, **kwargs)
+                except ValueError as exc:
+                    raise ToolError(str(exc)) from exc
+
+            return mcp.tool(annotations=annotations)(wrapper)
+
+        return register
 
     def _model_dir(model_name: str) -> Path:
         model_dir = models_root / model_name
@@ -67,7 +88,7 @@ def build_server(
             raise ValueError(f"model '{model_name}' not found in {models_root}")
         return model_dir
 
-    @mcp.tool(annotations=_read_only("List Models"))
+    @tool(annotations=_read_only("List Models"))
     def list_models() -> list[dict[str, Any]]:
         """List all trained glin models available on this machine."""
         if not models_root.exists():
@@ -78,12 +99,12 @@ def build_server(
             if (model_dir / engine.METADATA_FILENAME).exists()
         ]
 
-    @mcp.tool(annotations=_read_only("Inspect Model"))
+    @tool(annotations=_read_only("Inspect Model"))
     def inspect_model(model_name: str) -> dict[str, Any]:
         """Return feature names, types, and target classes for a trained model."""
         return engine.load_metadata(_model_dir(model_name))
 
-    @mcp.tool(annotations=_read_only("Predict"))
+    @tool(annotations=_read_only("Predict"))
     def predict(
         model_name: str, features: dict[str, Any], top_n: int = 10
     ) -> dict[str, Any]:
@@ -97,7 +118,7 @@ def build_server(
         bundle = engine.load_bundle(_model_dir(model_name))
         return engine.explain_record(bundle, features, top_n=top_n)
 
-    @mcp.tool(annotations=_read_only("Explain Model"))
+    @tool(annotations=_read_only("Explain Model"))
     def explain_model(
         model_name: str, top_n: int = 15, include_shapes: bool = True
     ) -> dict[str, Any]:
@@ -112,7 +133,7 @@ def build_server(
         bundle = engine.load_bundle(_model_dir(model_name))
         return engine.global_importance(bundle, top_n=top_n, include_shapes=include_shapes)
 
-    @mcp.tool(annotations=_read_only("List Hyperparameters"))
+    @tool(annotations=_read_only("List Hyperparameters"))
     def list_hyperparameters() -> list[dict[str, Any]]:
         """Every EBM training hyperparameter `train_model` accepts in its
         `hyperparameters` argument: name, type, default, allowed range, and
@@ -120,7 +141,7 @@ def build_server(
         prompt for a search strategy built on these."""
         return [hp.describe() for hp in HYPERPARAMETERS.values()]
 
-    @mcp.tool(annotations=_TRAIN_ANNOTATIONS)
+    @tool(annotations=_TRAIN_ANNOTATIONS)
     def train_model(
         target_column: str,
         model_name: str,
