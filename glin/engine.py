@@ -406,10 +406,11 @@ def _term_contributions(
 def explain_record(
     bundle: dict[str, Any], features: dict[str, Any], top_n: int = 10
 ) -> dict[str, Any]:
-    """Full glassbox audit: intercept, per-term contributions (sorted by
+    """Full glassbox audit: intercept (``base_logit``), per-term contributions (sorted by
     magnitude, main effects and interactions together), and an explicit
     additivity check against the model's own predict_proba. Binary targets
-    use the PRD's exact sigmoid formula; targets with more than two classes
+    use the PRD's exact sigmoid formula, with scores and ``base_logit`` in
+    log-odds of ``score_class`` (the second class); targets with more than two classes
     generalize it via softmax over per-class score vectors."""
     preprocessor = bundle["preprocessor"]
     model = bundle["model"]
@@ -426,8 +427,8 @@ def explain_record(
     predicted_class = target_classes[int(np.argmax(proba))]
 
     if n_classes == 2:
-        base_rate = float(intercept[0])
-        total_logit = base_rate + sum(float(c["score"]) for c in contributions)
+        base_logit = float(intercept[0])
+        total_logit = base_logit + sum(float(c["score"]) for c in contributions)
 
         for c in contributions:
             c["score"] = float(c["score"])
@@ -437,19 +438,21 @@ def explain_record(
 
         contributions.sort(key=lambda c: abs(c["score"]), reverse=True)
 
-        reconstructed = float(_sigmoid(total_logit))
-        model_probability = float(proba[1])
+        p1 = float(_sigmoid(total_logit))
+        reconstructed = {str(target_classes[0]): 1.0 - p1, str(target_classes[1]): p1}
+        model_probability = {str(target_classes[k]): float(proba[k]) for k in range(n_classes)}
 
         return {
             "predicted_class": predicted_class,
-            "base_rate": base_rate,
-            "probabilities": {
-                str(target_classes[i]): float(proba[i]) for i in range(n_classes)
-            },
+            "score_class": str(target_classes[1]),
+            "base_logit": base_logit,
+            "probabilities": model_probability,
             "contributions": contributions[:top_n],
             "reconstructed_probability": reconstructed,
             "model_probability": model_probability,
-            "additivity_verified": bool(abs(reconstructed - model_probability) < 1e-3),
+            "additivity_verified": bool(
+                all(abs(reconstructed[k] - model_probability[k]) < 1e-3 for k in reconstructed)
+            ),
             **preprocessor.check_inputs(features),
         }
 
@@ -473,7 +476,7 @@ def explain_record(
 
     return {
         "predicted_class": predicted_class,
-        "base_rate": {str(target_classes[k]): float(intercept[k]) for k in range(n_classes)},
+        "base_logit": {str(target_classes[k]): float(intercept[k]) for k in range(n_classes)},
         "probabilities": model_probability,
         "contributions": contributions[:top_n],
         "reconstructed_probability": reconstructed,

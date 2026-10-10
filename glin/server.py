@@ -114,9 +114,13 @@ def build_server(
         model_name: str, features: dict[str, Any], top_n: int = 10
     ) -> dict[str, Any]:
         """Predicted class and probabilities, plus the full glassbox audit:
-        baseline rate, every contributing feature's exact score (sorted by
-        magnitude), and an additivity check verifying the scores sum to the
-        model's own predicted probability. `warnings` names inputs the model never
+        `base_logit` (the intercept), every contributing feature's exact score
+        (sorted by magnitude), and an additivity check verifying the scores sum
+        to the model's own predicted probabilities (`reconstructed_probability`
+        vs `model_probability`, both keyed by class name). For binary targets
+        scores and `base_logit` are log-odds of `score_class` (positive pushes
+        toward it, negative toward the other class); multiclass reports
+        per-class scores and a per-class `base_logit`. `warnings` names inputs the model never
         saw (unseen categories, numerics or dates outside the training range,
         unparseable dates); treat the prediction as less reliable when present.
         `missing_features` lists absent inputs, which are valid but worth
