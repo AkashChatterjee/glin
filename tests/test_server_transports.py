@@ -174,7 +174,7 @@ async def test_train_model_from_csv_path_avoids_inlining_data(models_root, tmp_p
     csv_path = tmp_path / "data.csv"
     csv_path.write_text(_fixture_csv())
 
-    mcp = server.build_server(models_root=models_root)
+    mcp = server.build_server(models_root=models_root, allowed_dirs=[tmp_path])
     _, result = await mcp.call_tool(
         "train_model",
         {
@@ -425,3 +425,73 @@ def test_all_tools_have_annotations(tmp_path):
     for name, ann in by_name.items():
         if name != "train_model":
             assert ann.readOnlyHint is True and ann.destructiveHint is False
+
+
+def _train_with_path(models_root, allowed, csv_path):
+    mcp = server.build_server(models_root=models_root, allowed_dirs=allowed)
+    return mcp.call_tool(
+        "train_model",
+        {"csv_path": str(csv_path), "target_column": "churn", "model_name": "guarded"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_csv_path_rejects_non_csv_extension(models_root, tmp_path):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    with pytest.raises(ToolError, match=r"\.csv") as exc:
+        await _train_with_path(models_root, [tmp_path], secret)
+    assert "TOPSECRET" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_csv_path_rejects_directory_and_missing(models_root, tmp_path):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    (tmp_path / "dir.csv").mkdir()
+    with pytest.raises(ToolError, match="regular .csv file"):
+        await _train_with_path(models_root, [tmp_path], tmp_path / "dir.csv")
+    with pytest.raises(ToolError, match="not found or outside"):
+        await _train_with_path(models_root, [tmp_path], tmp_path / "nope.csv")
+
+
+@pytest.mark.asyncio
+async def test_csv_path_rejects_outside_allowed_dirs_and_traversal(models_root, tmp_path):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.csv"
+    outside.write_text(_fixture_csv())
+    with pytest.raises(ToolError, match="not found or outside"):
+        await _train_with_path(models_root, [allowed], outside)
+    with pytest.raises(ToolError, match="not found or outside"):
+        await _train_with_path(models_root, [allowed], allowed / ".." / "outside.csv")
+
+
+@pytest.mark.asyncio
+async def test_csv_path_symlink_escaping_allowed_dir_is_rejected(models_root, tmp_path):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.csv"
+    outside.write_text(_fixture_csv())
+    link = allowed / "link.csv"
+    link.symlink_to(outside)
+    with pytest.raises(ToolError, match="not found or outside"):
+        await _train_with_path(models_root, [allowed], link)
+
+
+@pytest.mark.asyncio
+async def test_csv_path_symlink_inside_allowed_dir_is_accepted(models_root, tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    real = allowed / "real.csv"
+    real.write_text(_fixture_csv())
+    link = allowed / "link.csv"
+    link.symlink_to(real)
+    _, result = await _train_with_path(models_root, [allowed], link)
+    assert result["model_name"] == "guarded"
