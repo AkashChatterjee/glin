@@ -88,3 +88,20 @@ def test_train_and_list_report_date_derived_features(tmp_path, monkeypatch):
     assert listed.exit_code == 0
     meta = engine.load_metadata(tmp_path / "models" / "m")
     assert str(len(meta["features"]["date"]["signup"]["features"])) in listed.output
+
+
+def test_train_prints_leakage_warnings_and_still_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
+    rng = np.random.RandomState(0)
+    df = pd.DataFrame({"noise": rng.normal(size=200).round(1), "tox": rng.uniform(0, 10, 200).round(2)})
+    df["unsafe"] = np.where(df["tox"] > 6, "yes", "no")
+    csv = tmp_path / "leak.csv"
+    df.to_csv(csv, index=False)
+
+    result = CliRunner().invoke(
+        cli.main, ["train", str(csv), "--target", "unsafe", "--name", "m", "--quiet"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Leakage warnings:" in result.output
+    assert "Possible target leakage: 'tox'" in result.output
+    assert (tmp_path / "models" / "m" / engine.BUNDLE_FILENAME).exists()
