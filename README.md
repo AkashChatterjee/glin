@@ -200,6 +200,8 @@ glin serve --allow-dir /data/csvs --allow-dir /srv/uploads
 
 `csv_content` is not affected. In the config of your MCP client, add the flags to `args`, for example `["serve", "--allow-dir", "/data/csvs"]`.
 
+The older flag `--mode stdio` is still accepted so that existing client configs keep working. glin ignores it. You can remove it from `args`.
+
 ## Let an agent tune the model
 
 An EBM is a sum of one learned curve for each feature, plus a few pairwise interaction tables. Cyclic boosting with tiny single-feature trees fits it. Most of its settings trade flexibility against smoothness. `train_model(hyperparameters={...})` exposes them: `max_bins`, `max_interaction_bins`, `interactions`, `learning_rate`, `max_rounds`, `early_stopping_rounds`, `validation_size`, `outer_bags`, `inner_bags`, `min_samples_leaf`, `max_leaves`, `reg_alpha`, `reg_lambda`, `smoothing_rounds`, `greedy_ratio` and `random_state`. Settings that you omit keep their defaults. glin rejects unknown names, wrong types and values out of range. The error message lists every problem. `glin/hyperparameters.py` defines each setting once. Add or widen a setting there.

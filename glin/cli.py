@@ -193,7 +193,14 @@ def delete(name: str, yes: bool) -> None:
     help="Directory train_model(csv_path=...) may read from; repeatable. "
     "Defaults to the home and current directories.",
 )
-def serve(allow_dirs: tuple[Path, ...]) -> None:
+@click.option(
+    "--mode",
+    type=click.Choice(["stdio"]),
+    default="stdio",
+    hidden=True,
+    help="Deprecated and ignored: stdio is the only transport.",
+)
+def serve(allow_dirs: tuple[Path, ...], mode: str) -> None:
     """Run the glin MCP server over stdio, for local MCP clients."""
     server.run_stdio(allowed_dirs=list(allow_dirs) or None)
 
