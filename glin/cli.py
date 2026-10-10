@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import click
 import pandas as pd
@@ -144,12 +145,21 @@ def delete(name: str, yes: bool) -> None:
 @click.option("--mode", type=click.Choice(["stdio", "http"]), default="stdio")
 @click.option("--host", default="0.0.0.0")
 @click.option("--port", default=8000, type=int)
-def serve(mode: str, host: str, port: int) -> None:
+@click.option(
+    "--allow-dir",
+    "allow_dirs",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory train_model(csv_path=...) may read from; repeatable. "
+    "Defaults to the home and current directories.",
+)
+def serve(mode: str, host: str, port: int, allow_dirs: tuple[Path, ...]) -> None:
     """Run the glin MCP server (stdio for local clients, http for remote agents)."""
+    allowed = list(allow_dirs) or None
     if mode == "stdio":
-        server.run_stdio()
+        server.run_stdio(allowed_dirs=allowed)
     else:
-        server.run_http(host=host, port=port)
+        server.run_http(host=host, port=port, allowed_dirs=allowed)
 
 
 if __name__ == "__main__":

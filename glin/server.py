@@ -20,11 +20,38 @@ from glin.engine import DEFAULT_MODELS_ROOT
 from glin.hyperparameters import HYPERPARAMETERS
 
 
+def default_allowed_dirs() -> list[Path]:
+    return [Path.home(), Path.cwd()]
+
+
+def resolve_csv_path(csv_path: str, allowed_dirs: list[Path]) -> Path:
+    """Validate a client-supplied CSV path. Errors never echo file contents,
+    and don't reveal whether a path outside the allowed directories exists."""
+    path = Path(csv_path).expanduser()
+    if path.suffix.lower() != ".csv":
+        raise ValueError("csv_path must point to a .csv file")
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        resolved = None
+    roots = [d.resolve() for d in allowed_dirs]
+    if resolved is None or not any(resolved.is_relative_to(r) for r in roots):
+        raise ValueError(
+            "csv_path not found or outside the directories this server may read "
+            "(see `glin serve --allow-dir`)"
+        )
+    if resolved.suffix.lower() != ".csv" or not resolved.is_file():
+        raise ValueError("csv_path must be a regular .csv file")
+    return resolved
+
+
 def build_server(
     host: str = "0.0.0.0",
     port: int = 8000,
     models_root: Path = DEFAULT_MODELS_ROOT,
+    allowed_dirs: Optional[list[Path]] = None,
 ) -> FastMCP:
+    allowed = list(allowed_dirs) if allowed_dirs else default_allowed_dirs()
     mcp = FastMCP("glin", host=host, port=port, stateless_http=True)
 
     def _model_dir(model_name: str) -> Path:
@@ -100,7 +127,7 @@ def build_server(
         clobbered.
 
         Pass exactly one of:
-        - csv_path: a path this server process can read (it does the
+        - csv_path: a .csv file inside a directory this server allows (it does the
           reading itself). Always prefer this when the MCP client runs on
           the same machine as the server, e.g. the local stdio transport
           (Claude Desktop, Cursor) -- it works for CSVs of any size without
@@ -150,7 +177,7 @@ def build_server(
             )
 
         df = (
-            pd.read_csv(csv_path)
+            pd.read_csv(resolve_csv_path(csv_path, allowed))
             if csv_path is not None
             else pd.read_csv(io.StringIO(csv_content))
         )
@@ -205,13 +232,21 @@ def build_server(
     return mcp
 
 
-def run_stdio(models_root: Path = DEFAULT_MODELS_ROOT) -> None:
-    build_server(models_root=models_root).run(transport="stdio")
+def run_stdio(
+    models_root: Path = DEFAULT_MODELS_ROOT,
+    allowed_dirs: Optional[list[Path]] = None,
+) -> None:
+    build_server(models_root=models_root, allowed_dirs=allowed_dirs).run(
+        transport="stdio"
+    )
 
 
 def run_http(
     host: str = "0.0.0.0",
     port: int = 8000,
     models_root: Path = DEFAULT_MODELS_ROOT,
+    allowed_dirs: Optional[list[Path]] = None,
 ) -> None:
-    build_server(host=host, port=port, models_root=models_root).run(transport="streamable-http")
+    build_server(
+        host=host, port=port, models_root=models_root, allowed_dirs=allowed_dirs
+    ).run(transport="streamable-http")

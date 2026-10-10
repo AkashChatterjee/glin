@@ -84,9 +84,19 @@ claude mcp add --transport http glin http://<host>:8000/mcp
 - `list_models()` — all trained models available.
 - `inspect_model(model_name)` — feature schema and target classes.
 - `predict(model_name, features, top_n=10)` — predicted class and probabilities, plus the full glassbox audit: base rate, every term's contribution (sorted by magnitude), and an explicit additivity check against the model's own predicted probability.
-- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a path the server process can read — always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). Returns the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below).
+- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2)` — train a new model, or retrain an existing one (`overwrite=True`) on refreshed data; a name collision without `overwrite=True` is rejected so nothing gets silently clobbered. Pass exactly one of `csv_path` (a `.csv` file the server may read — see [Restricting `csv_path`](#restricting-csv_path); always prefer this for local/stdio setups, since it works for CSVs of any size without the calling agent ever reproducing the file's contents) or `csv_content` (the raw CSV text inline — only for cases with no shared filesystem, e.g. a remote http deployment, and only for small data; inlining tens of thousands of rows as a tool argument is slow and context-expensive). Returns the resolved `hyperparameters`, `training_seconds`, term counts, and — when `holdout_fraction > 0` — an `evaluation` block of out-of-sample metrics (see below).
 - `explain_model(model_name, top_n=15, include_shapes=True)` — what the model learned, globally and exactly (read off the additive structure, not sampled from example predictions): every feature ranked by mean absolute log-odds contribution with its main-effect vs interaction split, the top terms including pairwise interactions with their share of the total, and for binary targets a per-feature shape (which categories or value ranges push toward which class).
 - `list_hyperparameters()` — every tunable EBM hyperparameter with its type, default, allowed range, and a note on what raising or lowering it does.
+
+## Restricting `csv_path`
+
+`train_model(csv_path=...)` only reads a regular file ending in `.csv` whose fully resolved path (symlinks and `..` followed) lies inside an allowed directory. Directories, devices, other extensions, missing files, traversal and symlinks pointing outside are rejected with an error that never includes file contents. By default the allowed directories are the server's home and working directories; override with a repeatable flag:
+
+```bash
+glin serve --mode http --allow-dir /data/csvs --allow-dir /srv/uploads
+```
+
+In Docker, mount your data and pass `--allow-dir` (the default home is `/root`). `csv_content` is unaffected.
 
 ## Letting an agent tune the model
 
