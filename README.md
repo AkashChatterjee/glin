@@ -36,6 +36,8 @@ cd glin
 pip install -e ".[dev]"
 ```
 
+glin works with both the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1,<3`); the test suite runs against each. To test a specific line, add a constraint, e.g. `pip install -e ".[dev]" "mcp>=2,<3"`.
+
 ## Train a model
 
 ```bash

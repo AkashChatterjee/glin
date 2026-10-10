@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 
 import numpy as np
@@ -8,6 +9,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from glin import engine, server
+
+ToolError = server.ToolError
 
 
 def _train_fixture_model(models_root, model_name="server_test_model"):
@@ -22,6 +25,19 @@ def _train_fixture_model(models_root, model_name="server_test_model"):
     df["churn"] = np.where(df["age"] < 40, "Yes", "No")
     bundle = engine.train_model(df, "churn", model_name=model_name)
     engine.save_bundle(bundle, models_root)
+
+
+async def _call(mcp, name, arguments):
+    """Structured tool result: mcp 1.x returns (content, structured), 2.x a CallToolResult."""
+    result = await mcp.call_tool(name, arguments)
+    return result[1] if isinstance(result, tuple) else result.structured_content
+
+
+def _hint(annotations, camel_name):
+    """Read a ToolAnnotations field: camelCase in mcp 1.x, snake_case in 2.x."""
+    if hasattr(annotations, camel_name):
+        return getattr(annotations, camel_name)
+    return getattr(annotations, re.sub(r"[A-Z]", lambda m: "_" + m.group().lower(), camel_name))
 
 
 @pytest.fixture
@@ -47,7 +63,7 @@ async def test_all_tools_registered(models_root):
 @pytest.mark.asyncio
 async def test_list_models_reads_metadata_without_unpickling(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, structured = await mcp.call_tool("list_models", {})
+    structured = await _call(mcp, "list_models", {})
     models = structured["result"]
     assert len(models) == 1
     assert models[0]["model_name"] == "server_test_model"
@@ -57,15 +73,13 @@ async def test_list_models_reads_metadata_without_unpickling(models_root):
 @pytest.mark.asyncio
 async def test_inspect_model_returns_feature_schema(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, meta = await mcp.call_tool("inspect_model", {"model_name": "server_test_model"})
+    meta = await _call(mcp, "inspect_model", {"model_name": "server_test_model"})
     assert meta["features"]["numeric"] == ["age"]
     assert meta["features"]["categorical"] == ["plan"]
 
 
 @pytest.mark.asyncio
 async def test_inspect_model_unknown_name_raises(models_root):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     mcp = server.build_server(models_root=models_root)
     with pytest.raises(ToolError, match="does_not_exist"):
         await mcp.call_tool("inspect_model", {"model_name": "does_not_exist"})
@@ -74,7 +88,8 @@ async def test_inspect_model_unknown_name_raises(models_root):
 @pytest.mark.asyncio
 async def test_predict_returns_prediction_and_verified_additivity(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, result = await mcp.call_tool(
+    result = await _call(
+        mcp,
         "predict",
         {"model_name": "server_test_model", "features": {"age": 25.0, "plan": "basic"}},
     )
@@ -88,7 +103,8 @@ async def test_predict_returns_prediction_and_verified_additivity(models_root):
 @pytest.mark.asyncio
 async def test_predict_top_n_truncates_contributions(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, result = await mcp.call_tool(
+    result = await _call(
+        mcp,
         "predict",
         {
             "model_name": "server_test_model",
@@ -114,7 +130,8 @@ def _fixture_csv(n=200, seed=0) -> str:
 @pytest.mark.asyncio
 async def test_train_model_trains_and_saves_a_new_model(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, result = await mcp.call_tool(
+    result = await _call(
+        mcp,
         "train_model",
         {
             "csv_content": _fixture_csv(),
@@ -133,8 +150,6 @@ async def test_train_model_trains_and_saves_a_new_model(models_root):
 
 @pytest.mark.asyncio
 async def test_train_model_refuses_to_clobber_existing_model_without_overwrite(models_root):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     mcp = server.build_server(models_root=models_root)
     with pytest.raises(ToolError, match="overwrite=True"):
         await mcp.call_tool(
@@ -150,7 +165,8 @@ async def test_train_model_refuses_to_clobber_existing_model_without_overwrite(m
 @pytest.mark.asyncio
 async def test_train_model_overwrite_retrains_existing_model(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, result = await mcp.call_tool(
+    result = await _call(
+        mcp,
         "train_model",
         {
             "csv_content": _fixture_csv(seed=1),
@@ -168,7 +184,8 @@ async def test_train_model_from_csv_path_avoids_inlining_data(models_root, tmp_p
     csv_path.write_text(_fixture_csv())
 
     mcp = server.build_server(models_root=models_root, allowed_dirs=[tmp_path])
-    _, result = await mcp.call_tool(
+    result = await _call(
+        mcp,
         "train_model",
         {
             "csv_path": str(csv_path),
@@ -182,8 +199,6 @@ async def test_train_model_from_csv_path_avoids_inlining_data(models_root, tmp_p
 
 @pytest.mark.asyncio
 async def test_train_model_requires_exactly_one_of_csv_path_or_csv_content(models_root):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     mcp = server.build_server(models_root=models_root)
     with pytest.raises(ToolError, match="exactly one"):
         await mcp.call_tool(
@@ -205,8 +220,6 @@ async def test_train_model_requires_exactly_one_of_csv_path_or_csv_content(model
 
 @pytest.mark.asyncio
 async def test_train_model_invalid_dataset_raises(models_root):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     mcp = server.build_server(models_root=models_root)
     tiny_csv = "age,churn\n25,Yes\n30,No\n"
     with pytest.raises(ToolError, match="at least"):
@@ -237,7 +250,7 @@ async def test_list_hyperparameters_matches_registry(models_root):
     from glin.hyperparameters import HYPERPARAMETERS
 
     mcp = server.build_server(models_root=models_root)
-    _, structured = await mcp.call_tool("list_hyperparameters", {})
+    structured = await _call(mcp, "list_hyperparameters", {})
     rows = {r["name"]: r for r in structured["result"]}
     assert set(rows) == set(HYPERPARAMETERS)
     assert rows["max_bins"]["default"] == 256
@@ -248,7 +261,8 @@ async def test_list_hyperparameters_matches_registry(models_root):
 @pytest.mark.asyncio
 async def test_train_model_applies_hyperparameters_and_reports_holdout_metrics(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, result = await mcp.call_tool(
+    result = await _call(
+        mcp,
         "train_model",
         {
             "csv_content": _fixture_csv(),
@@ -276,7 +290,8 @@ async def test_train_model_applies_hyperparameters_and_reports_holdout_metrics(m
 @pytest.mark.asyncio
 async def test_train_model_without_holdout_trains_on_everything(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, result = await mcp.call_tool(
+    result = await _call(
+        mcp,
         "train_model",
         {
             "csv_content": _fixture_csv(),
@@ -292,8 +307,6 @@ async def test_train_model_without_holdout_trains_on_everything(models_root):
 
 @pytest.mark.asyncio
 async def test_train_model_rejects_bad_hyperparameters_naming_every_problem(models_root):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     mcp = server.build_server(models_root=models_root)
     with pytest.raises(ToolError) as exc:
         await mcp.call_tool(
@@ -350,7 +363,7 @@ async def test_build_classifier_prompt_is_self_contained_and_generic(models_root
 @pytest.mark.asyncio
 async def test_explain_model_tool_returns_global_importance(models_root):
     mcp = server.build_server(models_root=models_root)
-    _, out = await mcp.call_tool("explain_model", {"model_name": "server_test_model"})
+    out = await _call(mcp, "explain_model", {"model_name": "server_test_model"})
     assert {f["feature"] for f in out["features"]} == {"age", "plan"}
     assert out["features"][0]["feature"] == "age"  # churn is a function of age
     assert out["terms"][0]["share"] > 0.5
@@ -388,7 +401,8 @@ async def test_stdio_real_mcp_client_round_trip(models_root):
                     "features": {"age": 25.0, "plan": "basic"},
                 },
             )
-            assert result.structuredContent["predicted_class"] in ("Yes", "No")
+            structured = getattr(result, "structuredContent", None) or result.structured_content
+            assert structured["predicted_class"] in ("Yes", "No")
 
 
 def test_all_tools_have_annotations(tmp_path):
@@ -397,19 +411,20 @@ def test_all_tools_have_annotations(tmp_path):
     for tool in tools:
         assert tool.annotations is not None, tool.name
         assert tool.annotations.title, tool.name
-        assert tool.annotations.readOnlyHint is not None, tool.name
-        assert tool.annotations.destructiveHint is not None, tool.name
+        assert _hint(tool.annotations, "readOnlyHint") is not None, tool.name
+        assert _hint(tool.annotations, "destructiveHint") is not None, tool.name
     by_name = {t.name: t.annotations for t in tools}
-    assert by_name["train_model"].readOnlyHint is False
-    assert by_name["train_model"].destructiveHint is True
+    assert _hint(by_name["train_model"], "readOnlyHint") is False
+    assert _hint(by_name["train_model"], "destructiveHint") is True
     for name, ann in by_name.items():
         if name != "train_model":
-            assert ann.readOnlyHint is True and ann.destructiveHint is False
+            assert _hint(ann, "readOnlyHint") is True and _hint(ann, "destructiveHint") is False
 
 
-def _train_with_path(models_root, allowed, csv_path):
+async def _train_with_path(models_root, allowed, csv_path):
     mcp = server.build_server(models_root=models_root, allowed_dirs=allowed)
-    return mcp.call_tool(
+    return await _call(
+        mcp,
         "train_model",
         {"csv_path": str(csv_path), "target_column": "churn", "model_name": "guarded"},
     )
@@ -417,8 +432,6 @@ def _train_with_path(models_root, allowed, csv_path):
 
 @pytest.mark.asyncio
 async def test_csv_path_rejects_non_csv_extension(models_root, tmp_path):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     secret = tmp_path / "secret.txt"
     secret.write_text("TOPSECRET")
     with pytest.raises(ToolError, match=r"\.csv") as exc:
@@ -428,8 +441,6 @@ async def test_csv_path_rejects_non_csv_extension(models_root, tmp_path):
 
 @pytest.mark.asyncio
 async def test_csv_path_rejects_directory_and_missing(models_root, tmp_path):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     (tmp_path / "dir.csv").mkdir()
     with pytest.raises(ToolError, match="regular .csv file"):
         await _train_with_path(models_root, [tmp_path], tmp_path / "dir.csv")
@@ -439,8 +450,6 @@ async def test_csv_path_rejects_directory_and_missing(models_root, tmp_path):
 
 @pytest.mark.asyncio
 async def test_csv_path_rejects_outside_allowed_dirs_and_traversal(models_root, tmp_path):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "outside.csv"
@@ -453,8 +462,6 @@ async def test_csv_path_rejects_outside_allowed_dirs_and_traversal(models_root, 
 
 @pytest.mark.asyncio
 async def test_csv_path_symlink_escaping_allowed_dir_is_rejected(models_root, tmp_path):
-    from mcp.server.fastmcp.exceptions import ToolError
-
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "outside.csv"
@@ -473,5 +480,5 @@ async def test_csv_path_symlink_inside_allowed_dir_is_accepted(models_root, tmp_
     real.write_text(_fixture_csv())
     link = allowed / "link.csv"
     link.symlink_to(real)
-    _, result = await _train_with_path(models_root, [allowed], link)
+    result = await _train_with_path(models_root, [allowed], link)
     assert result["model_name"] == "guarded"
