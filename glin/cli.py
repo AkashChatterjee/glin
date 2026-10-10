@@ -5,10 +5,10 @@ import shutil
 from pathlib import Path
 
 import click
-import pandas as pd
 
 from glin import engine, server
 from glin.engine import DEFAULT_MODELS_ROOT
+from glin.loaders import load_table
 from glin.validation import validate_dataset
 
 
@@ -33,14 +33,41 @@ def _print_training_progress(best_log_loss: float, elapsed_seconds: float) -> No
 @click.option("--target", required=True, help="Name of the target column to predict.")
 @click.option("--name", required=True, help="Unique name to save this model under.")
 @click.option(
+    "--sheet",
+    default=None,
+    help="Excel only: sheet name or 1-based position (required if the workbook "
+    "has several sheets).",
+)
+@click.option(
+    "--header-rows",
+    default=None,
+    help="Excel only: header row(s) as shown in Excel, e.g. 4 or 3-4 for a "
+    "multi-row header. Auto-detected when omitted.",
+)
+@click.option(
     "--quiet",
     is_flag=True,
     help="Suppress the live boosting-progress lines (stage messages still print).",
 )
-def train(csv_path: str, target: str, name: str, quiet: bool) -> None:
-    """Train an EBM classifier on CSV_PATH and save it as --name."""
+def train(
+    csv_path: str,
+    target: str,
+    name: str,
+    sheet: str | None,
+    header_rows: str | None,
+    quiet: bool,
+) -> None:
+    """Train an EBM classifier on CSV_PATH (.csv, .xlsx or .xls) and save it
+    as --name. Excel needs `pip install 'glin-ml[excel]'`."""
     click.echo(f"Loading {csv_path} ...")
-    df = pd.read_csv(csv_path)
+    try:
+        table = load_table(csv_path, sheet, header_rows)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
+    df = table.df
+    if table.sheet is not None:
+        rows = ", ".join(str(r) for r in table.header_rows)
+        click.echo(f"  sheet {table.sheet!r}, header row(s): {rows}")
     click.echo(f"  {len(df):,} rows, {len(df.columns)} columns")
 
     click.echo("Validating dataset...")
