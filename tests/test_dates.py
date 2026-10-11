@@ -221,6 +221,54 @@ def test_check_inputs_for_dates():
     assert [w["issue"] for w in pre.check_inputs({"d": "2020-12-31"})["warnings"]] == ["out_of_range"]
 
 
+def _format_warnings(pre, value):
+    return [
+        (w["issue"], w["parsed_as"])
+        for w in pre.check_inputs({"d": value})["warnings"]
+        if "parsed_as" in w
+    ]
+
+
+def test_numeric_input_on_iso_column_warns_when_day_month_order_is_ambiguous():
+    pre = _fit(_daily(n=1200))
+    assert _format_warnings(pre, "05/03/2024") == [("ambiguous_date_format", "2024-05-03")]
+    assert pre.transform({"d": "05/03/2024"}).iloc[0]["d__month"] == "may"
+    # One field above 12, or equal fields, leave only one reading.
+    assert _format_warnings(pre, "13/02/2024") == []
+    assert _format_warnings(pre, "02/13/2024") == []
+    assert _format_warnings(pre, "05/05/2024") == []
+
+
+def test_numeric_input_on_month_name_column_warns_when_ambiguous():
+    pre = _fit(_daily(n=1200, fmt="%b %d, %Y"))
+    assert _format_warnings(pre, "05.03.2024") == [("ambiguous_date_format", "2024-05-03")]
+    assert _format_warnings(pre, "Mar 5, 2024") == []
+
+
+@pytest.mark.parametrize(
+    "fmt, value",
+    [("%d/%m/%Y", "02/13/2024"), ("%m/%d/%Y", "13/02/2024")],
+)
+def test_input_that_cannot_follow_the_training_order_warns(fmt, value):
+    pre = _fit(_daily(n=1200, fmt=fmt))
+    assert _format_warnings(pre, value) == [("date_order_mismatch", "2024-02-13")]
+    assert pre.transform({"d": value}).iloc[0]["d__month"] == "feb"
+
+
+@pytest.mark.parametrize("fmt", ["%d/%m/%Y", "%m/%d/%Y"])
+def test_input_in_the_training_order_does_not_warn(fmt):
+    pre = _fit(_daily(n=1200, fmt=fmt))
+    value = pd.Timestamp("2022-03-05").strftime(fmt)
+    assert pre.check_inputs({"d": value}) == {"warnings": [], "missing_features": []}
+
+
+@pytest.mark.parametrize("fmt", ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%b %d, %Y"])
+def test_iso_input_never_gets_a_format_warning(fmt):
+    pre = _fit(_daily(n=1200, fmt=fmt))
+    assert pre.check_inputs({"d": "2022-03-05"}) == {"warnings": [], "missing_features": []}
+    assert pre.check_inputs({"d": "2022-03-05T10:30:00"})["warnings"] == []
+
+
 def test_unseen_month_is_flagged():
     dates = [d for d in _daily(n=800, start="2021-01-01") if d[5:7] != "03"]
     pre = _fit(dates)
