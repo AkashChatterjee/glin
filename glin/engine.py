@@ -466,7 +466,8 @@ def explain_record(
     magnitude, main effects and interactions together), and an explicit
     additivity check against the model's own predict_proba. Binary targets
     use the PRD's exact sigmoid formula, with scores and ``base_logit`` in
-    log-odds of ``score_class`` (the second class); targets with more than two classes
+    log-odds of ``score_class`` (``target_classes[1]``, same type as ``predicted_class``;
+    probability dicts are keyed by ``str(class)``); targets with more than two classes
     generalize it via softmax over per-class score vectors."""
     preprocessor = bundle["preprocessor"]
     model = bundle["model"]
@@ -500,7 +501,7 @@ def explain_record(
 
         return {
             "predicted_class": predicted_class,
-            "score_class": str(target_classes[1]),
+            "score_class": target_classes[1],
             "base_logit": base_logit,
             "probabilities": model_probability,
             "contributions": contributions[:top_n],
@@ -542,6 +543,13 @@ def explain_record(
     }
 
 
+def _edge(value: float) -> str:
+    """4 significant digits, without exponent notation below 1e7 (21140, not 2.114e+04)."""
+    if abs(value) >= 1e7:
+        return f"{value:.4g}"
+    return np.format_float_positional(value, precision=4, unique=False, fractional=False, trim="-")
+
+
 def _shape_summary(global_data: dict[str, Any], top_k: int = 3) -> dict[str, Any]:
     """Compact description of one main-effect curve: for a categorical, the
     categories pushing hardest toward and away from the positive class; for a
@@ -561,7 +569,7 @@ def _shape_summary(global_data: dict[str, Any], top_k: int = 3) -> dict[str, Any
     # interpret's lower_bounds/upper_bounds are score confidence bounds, not bin edges.
     edges = [float(e) for e in names]
     imax, imin = int(np.argmax(scores)), int(np.argmin(scores))
-    at = lambda i: f"[{edges[i]:.4g}, {edges[i + 1]:.4g}]"
+    at = lambda i: f"[{_edge(edges[i])}, {_edge(edges[i + 1])}]"
     return {
         "kind": "continuous",
         "highest": {"range": at(imax), "score": round(float(scores[imax]), 4)},

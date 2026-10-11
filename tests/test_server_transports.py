@@ -516,3 +516,15 @@ async def test_date_column_trains_inspects_and_predicts_over_mcp(models_root):
     assert result["additivity_verified"] is True
     assert result["contributions"][0]["feature"] == "signup_date__day_of_week"
     assert result["contributions"][0]["value"] == "sat"
+
+
+@pytest.mark.asyncio
+async def test_predict_score_class_keeps_the_target_type_over_mcp(tmp_path):
+    rng = np.random.RandomState(0)
+    df = pd.DataFrame({"age": rng.randint(18, 80, size=200).astype(float)})
+    df["churn"] = np.where(df["age"] < 40, 1, 0)
+    engine.save_bundle(engine.train_model(df, "churn", model_name="int_target"), tmp_path)
+    mcp = server.build_server(models_root=tmp_path)
+    result = await _call(mcp, "predict", {"model_name": "int_target", "features": {"age": 25.0}})
+    assert result["score_class"] == 1 and result["predicted_class"] == 1
+    assert set(result["model_probability"]) == {"0", "1"}

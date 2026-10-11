@@ -147,7 +147,8 @@ Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All t
   - `base_logit` is the intercept.
   - `contributions` lists the contribution of every term, sorted by size.
   - `additivity_verified` checks that `reconstructed_probability` equals `model_probability`. Both are keyed by class name.
-  - For binary targets, `score_class` is the alphabetically second class. The scores and `base_logit` are log-odds for this class. A positive score pushes toward it. A negative score pushes toward the other class.
+  - For binary targets, `score_class` is the second entry of `target_classes`. glin sorts the classes by value, so this is not always the alphabetically second class. The scores and `base_logit` are log-odds for this class. A positive score pushes toward it. A negative score pushes toward the other class.
+  - `predicted_class`, `score_class` and the entries of `target_classes` have the type of the target values (for example `1`, or `true` in JSON). The keys of `probabilities`, `model_probability` and `reconstructed_probability` are always text (for example `"1"` or `"True"`). To find the probability of `score_class` in Python, use `model_probability[str(score_class)]`.
   - For multiclass targets, `base_logit` is per class, and each term has `score_by_class`.
   - `warnings` lists inputs that the model never saw. Each warning has `feature`, `value` and `issue`. The issue is `unseen_category`, `out_of_range`, `unparseable_number`, `unparseable_date`, `ambiguous_date_format` or `date_order_mismatch`. `out_of_range` warnings also have `training_range`. Date format warnings also have `parsed_as`, the date that glin used. `unparseable_number` is for a numeric input that is not a finite number, for example `abc` or `inf`. glin then treats the input as missing. A blank input or a suppression code does not give this warning. Each `value` is safe for JSON: glin sends `inf` as the string `"inf"`.
   - `missing_features` lists inputs that are absent or blank. These inputs are valid. glin reports them separately.
@@ -164,7 +165,7 @@ Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All t
 - `explain_model(model_name, top_n=15, include_shapes=True)` shows what the model learned. glin reads it exactly from the additive structure. It does not sample example predictions. The result has:
   - every feature, ranked by mean absolute log-odds contribution, with its main-effect part and its interaction part;
   - the top terms, including pairwise interactions, with their share of the total;
-  - for binary targets, a shape for each feature that shows which categories or value ranges push toward which class. For a continuous feature, the shape gives the value range (bin edges, in the units of the feature) where the curve is highest and lowest.
+  - for binary targets, a shape for each feature that shows which categories or value ranges push toward which class. For a continuous feature, the shape gives the value range (bin edges, in the units of the feature) where the curve is highest and lowest. The edges have 4 significant digits. Values below 10,000,000 do not use exponent notation (for example `21140`, not `2.114e+04`).
 - `list_hyperparameters()` lists every EBM hyperparameter. Each entry has its type, default, allowed range and a note on what a higher or lower value does.
 
 ## Prompts exposed over MCP
@@ -334,7 +335,9 @@ glin flags such a column in `warnings` as `Possible target leakage: ...`. The wa
 - The target needs at least 2 distinct non-null values (binary or multiclass). A single-class target is a hard error.
 - glin drops rows with a missing target value and returns a warning. The other rows are not affected.
 - A numeric target with more than 20 distinct values triggers a warning that it looks like a regression target. glin trains classifiers, not regressors, so each value would become its own unrelated class. Band the target into a few classes (quantiles or domain thresholds), or pick another target.
-- A numeric target with 3 to 20 distinct values (for example a score or an ordinal level) triggers a warning. The multiclass model ignores the order of the values. Use fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts give the same guidance.
+- A numeric target with 3 to 20 distinct values (for example a score or an ordinal level) triggers a warning. The multiclass model ignores the order of the values. The warning gives an example with the real values of the target. Use fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts give the same guidance.
+- These two checks also apply to a text target whose values are numbers, for example `"85%"` or `"1"` to `"5"`. glin parses the values with the same rules as a numeric feature column. The model still uses each text value as a class.
+- A text target with more than 20 distinct values triggers a warning. Each value becomes its own class, and each class needs many rows.
 - Full regression (the upstream `ExplainableBoostingRegressor`) is planned separately. It is not yet supported.
 
 ## Releasing (maintainers)

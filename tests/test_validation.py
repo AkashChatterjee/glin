@@ -153,3 +153,41 @@ def test_train_model_surfaces_unrecognized_code_warning_and_custom_codes_silence
         suppression_codes=["SUPP", "xx"],
     )
     assert bundle["warnings"] == []
+
+
+def test_numeric_text_target_with_many_values_gets_regression_warning():
+    df = _base_df()
+    df["score"] = [f"{v}%" for v in np.random.RandomState(4).randint(0, 100, size=len(df))]
+    result = validate_dataset(df, "score")
+    assert any("regressor" in i.message and "stored as text" in i.message for i in result.warnings)
+
+
+def test_numeric_text_target_with_few_values_warns_order_is_ignored():
+    df = _base_df()
+    df["level"] = [str(v) for v in np.random.RandomState(2).randint(1, 6, size=len(df))]
+    result = validate_dataset(df, "level")
+    assert any("ignores their order" in i.message for i in result.warnings)
+    assert any("predicting '4' when the truth is '5'" in i.message for i in result.warnings)
+
+
+def test_text_target_with_many_classes_warns():
+    df = _base_df(n=100)
+    df["city"] = [f"city_{v}" for v in np.random.RandomState(5).randint(0, 30, size=len(df))]
+    result = validate_dataset(df, "city")
+    assert any("its own class" in i.message for i in result.warnings)
+
+
+def test_text_target_with_few_classes_has_no_target_shape_warning():
+    df = _base_df()
+    df["risk"] = np.random.RandomState(6).choice(["low", "medium", "high"], size=len(df))
+    result = validate_dataset(df, "risk")
+    assert not any("risk" in i.message for i in result.warnings)
+
+
+def test_ordinal_warning_uses_real_classes_and_gives_advice_once():
+    df = _base_df()
+    df["grade"] = np.random.RandomState(7).choice([10, 20, 30], size=len(df))
+    (message,) = [i.message for i in validate_dataset(df, "grade").warnings]
+    assert "predicting 20 when the truth is 30 is as wrong as predicting 10" in message
+    assert message.lower().count("band the target") == 1
+    assert "fewer classes" not in message
