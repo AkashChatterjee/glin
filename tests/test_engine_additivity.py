@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -291,3 +293,29 @@ def test_predict_reports_missing_inputs_separately_from_warnings():
     result = engine.explain_record(bundle, {"num1": None, "cat1": ""})
     assert result["warnings"] == []
     assert set(result["missing_features"]) == {"num1", "num2", "cat1"}
+
+
+def test_wide_frame_trains_and_predicts_without_pandas_warnings():
+    rng = np.random.RandomState(0)
+    n = 200
+    columns = {}
+    for i in range(120):
+        if i % 3 == 0:
+            columns[f"num{i}"] = np.round(rng.normal(size=n), 1)
+        elif i % 3 == 1:
+            values = np.round(rng.uniform(0, 100, size=n), 1).astype(str)
+            columns[f"text_num{i}"] = np.where(rng.rand(n) < 0.1, "", values)
+        else:
+            columns[f"cat{i}"] = rng.choice(["a", "b", "c"], size=n)
+    df = pd.DataFrame(columns)
+    df["label"] = np.where(df["num0"] > 0, "positive", "negative")
+    record = df.drop(columns=["label", "num3"]).iloc[0].to_dict()
+    record["text_num1"] = ""
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pd.errors.PerformanceWarning)
+        warnings.simplefilter("error", FutureWarning)
+        bundle = engine.train_model(
+            df, "label", model_name="wide_test", hyperparameters={"interactions": 0, "outer_bags": 2}
+        )
+        engine.predict_record(bundle, record)

@@ -321,7 +321,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         else:
             X = pd.DataFrame(X)
 
-        out = pd.DataFrame(index=X.index)
+        out: dict[str, pd.Series] = {}
 
         for col in self.numeric_columns_:
             if col in X.columns:
@@ -332,7 +332,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                     )
                 )
             else:
-                out[col] = np.nan
+                out[col] = pd.Series(np.nan, index=X.index)
 
         for col in self.categorical_columns_:
             if col in X.columns:
@@ -340,14 +340,17 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                 vocab = self.categorical_vocab_[col]
                 out[col] = cleaned.where(cleaned.isin(vocab), self.missing_token)
             else:
-                out[col] = self.missing_token
+                out[col] = pd.Series(self.missing_token, index=X.index, dtype=object)
 
         for col in getattr(self, "date_columns_", []):
-            parts = self._date_parts(X[col] if col in X.columns else None, col, X.index)
-            for name, values in parts.items():
-                out[name] = values
+            out.update(self._date_parts(X[col] if col in X.columns else None, col, X.index))
 
-        return out[self.output_columns_]
+        # One concat: adding columns one by one fragments wide frames.
+        if not self.output_columns_:
+            return pd.DataFrame(index=X.index)[self.output_columns_]
+        return pd.concat(
+            [out[name].rename(name) for name in self.output_columns_], axis=1
+        )
 
     def check_inputs(self, record: dict) -> dict[str, list]:
         """Flag a single inference record's inputs the model has not seen.
@@ -650,7 +653,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         cleaned = self._strip_symbols(series)
         cleaned = cleaned.mask(cleaned.str.lower().isin(self._code_set()))
         cleaned = cleaned.map(lambda text: _normalize_number(text, decimal_comma))
-        cleaned = cleaned.replace({"": np.nan, "nan": np.nan, "None": np.nan})
+        cleaned = cleaned.mask(cleaned.isin(["", "nan", "None"]))
         return cleaned.mask(native, series)
 
     def _clean_categorical(self, series: pd.Series) -> pd.Series:
