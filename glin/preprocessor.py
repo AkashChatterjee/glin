@@ -6,11 +6,13 @@ drop rules only apply once a column has failed to qualify as numeric. EBM
 bins continuous values regardless of how many distinct values they take, so
 a dirty numeric column stored as ``object`` dtype (e.g. a currency-like
 total with a few blank rows for new customers) is exempted from cardinality
--based dropping the moment it's recognized as mostly-numeric, no matter how
-unique its values are. A genuine identifier stored as a *native* numeric
+-based dropping the moment it's recognized as mostly-numeric, unless it is an
+integer identifier as below. A genuine identifier stored as a *native* numeric
 dtype (a sequential passenger index, read by pandas as a clean int64 column)
-is caught when the column is highly unique and every value is a distinct
-integer; repeated values or fractions mark a measurement, which is kept. Date
+is caught when the column is highly unique, every value is a distinct integer,
+and the values fill a constant-step range or the name looks like an ID; the
+same rule applies to mostly-numeric object columns. Repeated values, fractions
+or large uneven gaps (salaries, epoch seconds) mark a measurement. Date
 columns (string columns of full calendar dates) are recognized before any of
 those checks, since a date column is usually unique per row and would otherwise
 be dropped as an identifier. Every dropped column adds a reason to ``warnings_``.
@@ -67,6 +69,14 @@ _US_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3})+\.\d+$")
 _US_GROUPED_COMMAS_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3}){2,}$")
 _EU_ONE_DOT_GROUP_RE = re.compile(r"^[-+]?[1-9]\d{0,2}\.\d{3}$")
 _DOT_GROUPS_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3})+$")
+
+# A distinct-integer column is an ID when its values fill at least this share
+# of the constant-step range they span. Random unique measurements fill far
+# less (no repeats in n draws needs a range of about n**2 slots).
+_MIN_ID_RANGE_FILL = 0.2
+_ID_NAME_TOKENS = {"id", "ids", "idx", "uuid", "guid", "key", "pk"}
+_ID_NAMES = {"index", "rowid", "rownum", "rownumber", "rowindex", "recordid"}
+_CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 _MAX_UNKNOWN_CODE_TOKENS = 5
 _MAX_UNKNOWN_CODE_LENGTH = 8
@@ -130,6 +140,12 @@ def _normalize_separators(text, decimal_comma: bool):
     if mark == ",":
         return text.replace(".", "").replace(",", ".")
     return text.replace(",", "")
+
+
+def _id_like_name(col) -> bool:
+    words = re.split(r"[^A-Za-z0-9]+", _CAMEL_RE.sub("_", str(col)))
+    tokens = [w.lower() for w in words if w]
+    return "".join(tokens) in _ID_NAMES or any(t in _ID_NAME_TOKENS for t in tokens)
 
 
 class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
@@ -223,22 +239,20 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             )
 
             if pd.api.types.is_numeric_dtype(series):
-                # Native numerics are identifiers only when every value is a
-                # distinct integer; repeats or fractions mean a measurement.
-                if is_id_like and self._all_distinct_integers(series):
-                    self._drop(
-                        dropped,
-                        col,
-                        "it looks like a row identifier (every value is a distinct "
-                        "integer)",
-                        KEEP_HINT,
-                    )
+                if is_id_like and self._is_integer_id(col, series):
+                    self._drop_integer_id(dropped, col)
                     continue
                 numeric_cols.append(col)
                 continue
 
             decimal_comma = self._detect_decimal_comma(col, series)
             if self._is_mostly_numeric(series, decimal_comma):
+                parsed = pd.to_numeric(
+                    self._strip_numeric(series, decimal_comma), errors="coerce"
+                )
+                if is_id_like and self._is_integer_id(col, parsed):
+                    self._drop_integer_id(dropped, col)
+                    continue
                 if decimal_comma:
                     self.decimal_comma_columns_.append(col)
                 self._warn_on_unrecognized_codes(col, series, decimal_comma)
@@ -309,12 +323,34 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         message = f"Dropped column '{col}': {reason}."
         self.warnings_.append(f"{message} {hint}" if hint else message)
 
+    def _drop_integer_id(self, dropped: list[str], col: str) -> None:
+        self._drop(
+            dropped,
+            col,
+            "it looks like a row identifier (distinct whole numbers that fill a "
+            "range, or an ID-like name)",
+            KEEP_HINT,
+        )
+
     @staticmethod
-    def _all_distinct_integers(series: pd.Series) -> bool:
-        values = series.dropna()
-        if values.nunique() != len(values):
+    def _is_integer_id(col, values: pd.Series) -> bool:
+        """Distinct integers that fill a constant-step range, or that have an
+        ID-like name. Unique integers with large uneven gaps (salaries, epoch
+        seconds) are measurements."""
+        values = values.dropna()
+        if len(values) < 2 or values.nunique() != len(values):
             return False
-        return bool((values == np.floor(values)).all())
+        if not bool((values == np.floor(values)).all()):
+            return False
+        if _id_like_name(col):
+            return True
+        ints = np.sort(values.to_numpy(dtype=np.float64))
+        if np.abs(ints).max() >= 2**62:
+            return False
+        ints = ints.astype(np.int64)
+        step = np.gcd.reduce(np.diff(ints))
+        slots = (ints[-1] - ints[0]) // step + 1
+        return len(ints) / slots >= _MIN_ID_RANGE_FILL
 
     def transform(self, X: pd.DataFrame | dict) -> pd.DataFrame:
         check_is_fitted(self, "output_columns_")
