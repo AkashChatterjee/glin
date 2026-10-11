@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import functools
 import io
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,17 +23,51 @@ except ImportError:  # mcp 1.x
     from mcp.server.fastmcp.exceptions import ToolError
 
 
+DEFAULT_MAX_FILE_MB = 200
+
+
+def _is_fs_root(path: Path) -> bool:
+    return path.parent == path
+
+
 def default_allowed_dirs() -> list[Path]:
-    return [Path.home(), Path.cwd()]
+    """The home directory, plus the working directory unless it is a
+    filesystem root or an ancestor of home (e.g. `/` or `/Users`, where some
+    MCP clients start servers). A root home is left out too."""
+    home = Path.home().resolve()
+    cwd = Path.cwd().resolve()
+    dirs = [] if _is_fs_root(home) else [home]
+    if not _is_fs_root(cwd) and cwd not in home.parents and cwd not in dirs:
+        dirs.append(cwd)
+    return dirs
+
+
+def warn_root_dirs(allowed_dirs: list[Path]) -> None:
+    for d in allowed_dirs:
+        if _is_fs_root(d.resolve()):
+            print(
+                f"glin: warning: allowed directory {d} is a filesystem root; "
+                "train_model(csv_path=...) can read any .csv/.xlsx/.xls file on it",
+                file=sys.stderr,
+            )
 
 
 READABLE_SUFFIXES = (".csv", *EXCEL_SUFFIXES)
 
 
-def resolve_csv_path(csv_path: str, allowed_dirs: list[Path]) -> Path:
+def resolve_csv_path(
+    csv_path: str,
+    allowed_dirs: list[Path],
+    max_file_mb: Optional[float] = DEFAULT_MAX_FILE_MB,
+) -> Path:
     """Validate a client-supplied data-file path (.csv, .xlsx or .xls). Errors
     never echo file contents, and don't reveal whether a path outside the
-    allowed directories exists."""
+    allowed directories exists. `max_file_mb=None` disables the size limit."""
+    if not allowed_dirs:
+        raise ValueError(
+            "csv_path is disabled: this server allows no directories (start it "
+            "with `glin serve --allow-dir DIR`); pass csv_content instead"
+        )
     path = Path(csv_path).expanduser()
     if path.suffix.lower() not in READABLE_SUFFIXES:
         raise ValueError("csv_path must point to a .csv, .xlsx or .xls file")
@@ -48,6 +83,13 @@ def resolve_csv_path(csv_path: str, allowed_dirs: list[Path]) -> Path:
         )
     if resolved.suffix.lower() not in READABLE_SUFFIXES or not resolved.is_file():
         raise ValueError(f"csv_path must be a regular {path.suffix.lower()} file")
+    if max_file_mb is not None:
+        size_mb = resolved.stat().st_size / 1024**2
+        if size_mb > max_file_mb:
+            raise ValueError(
+                f"csv_path is {size_mb:.0f} MB, above this server's limit of "
+                f"{max_file_mb:g} MB (change it with `glin serve --max-file-mb`)"
+            )
     return resolved
 
 
@@ -69,8 +111,11 @@ _TRAIN_ANNOTATIONS = ToolAnnotations(
 def build_server(
     models_root: Path = DEFAULT_MODELS_ROOT,
     allowed_dirs: Optional[list[Path]] = None,
+    max_file_mb: Optional[float] = DEFAULT_MAX_FILE_MB,
 ) -> MCPServer:
-    allowed = list(allowed_dirs) if allowed_dirs else default_allowed_dirs()
+    """`allowed_dirs=None` uses `default_allowed_dirs()`; `[]` disables csv_path."""
+    allowed = default_allowed_dirs() if allowed_dirs is None else list(allowed_dirs)
+    warn_root_dirs(allowed)
     mcp = MCPServer("glin")
 
     def tool(annotations: ToolAnnotations):
@@ -175,7 +220,8 @@ def build_server(
         Pass exactly one of:
         - csv_path: a .csv, .xlsx or .xls file inside a directory this
           server allows (it does the reading itself). Always prefer this --
-          it works for files of any size without the calling agent ever
+          it works for large files (up to the server's size limit, 200 MB
+          by default) without the calling agent ever
           having to read or reproduce the file's contents itself. Excel
           files need the optional `glin-ml[excel]` install.
         - csv_content: the complete raw CSV text (header row + data rows).
@@ -263,7 +309,9 @@ def build_server(
 
         source = None
         if csv_path is not None:
-            source = load_table(resolve_csv_path(csv_path, allowed), sheet, header_rows)
+            source = load_table(
+                resolve_csv_path(csv_path, allowed, max_file_mb), sheet, header_rows
+            )
             df = source.df
         else:
             if sheet is not None or header_rows is not None:
@@ -331,8 +379,9 @@ def build_server(
 def run_stdio(
     models_root: Path = DEFAULT_MODELS_ROOT,
     allowed_dirs: Optional[list[Path]] = None,
+    max_file_mb: Optional[float] = DEFAULT_MAX_FILE_MB,
 ) -> None:
-    build_server(models_root=models_root, allowed_dirs=allowed_dirs).run(
-        transport="stdio"
-    )
+    build_server(
+        models_root=models_root, allowed_dirs=allowed_dirs, max_file_mb=max_file_mb
+    ).run(transport="stdio")
 

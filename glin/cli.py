@@ -191,7 +191,15 @@ def delete(name: str, yes: bool) -> None:
     multiple=True,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Directory train_model(csv_path=...) may read from; repeatable. "
-    "Defaults to the home and current directories.",
+    "Defaults to the home directory, plus the current directory unless it is "
+    "/ or an ancestor of home.",
+)
+@click.option(
+    "--max-file-mb",
+    type=click.FloatRange(min=0, min_open=True),
+    default=server.DEFAULT_MAX_FILE_MB,
+    show_default=True,
+    help="Largest file train_model(csv_path=...) may read, in MB.",
 )
 @click.option(
     "--mode",
@@ -200,9 +208,9 @@ def delete(name: str, yes: bool) -> None:
     hidden=True,
     help="Deprecated and ignored: stdio is the only transport.",
 )
-def serve(allow_dirs: tuple[Path, ...], mode: str) -> None:
+def serve(allow_dirs: tuple[Path, ...], max_file_mb: float, mode: str) -> None:
     """Run the glin MCP server over stdio, for local MCP clients."""
-    server.run_stdio(allowed_dirs=list(allow_dirs) or None)
+    server.run_stdio(allowed_dirs=list(allow_dirs) or None, max_file_mb=max_file_mb)
 
 
 if __name__ == "__main__":
