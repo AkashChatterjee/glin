@@ -150,6 +150,83 @@ def test_categorical_with_enough_support_per_value_can_still_be_flagged():
     assert _columns(_suspects(df, "y")) == ["code"]
 
 
+@pytest.mark.parametrize("levels", [101, 150, 240])
+def test_categorical_with_more_than_100_levels_recoded_into_target_is_flagged(levels):
+    rng = np.random.RandomState(20)
+    n = 4000
+    district = rng.randint(0, levels, n)
+    df = pd.DataFrame({"noise": rng.normal(size=n), "district": [f"D{d:03d}" for d in district]})
+    df["y"] = np.where(district % 2 == 0, "urban", "rural")
+    assert _columns(_suspects(df, "y")) == ["district"]
+
+
+def test_train_model_flags_high_cardinality_recode_on_training_rows():
+    rng = np.random.RandomState(21)
+    district = rng.randint(0, 150, 4000)
+    df = pd.DataFrame({"noise": rng.normal(size=4000), "district": [f"D{d:03d}" for d in district]})
+    df["y"] = np.where(district % 2 == 0, "urban", "rural")
+    bundle = engine.train_model(
+        df, "y", model_name="m", holdout_fraction=0.2, hyperparameters={"interactions": 0, "outer_bags": 1}
+    )
+    assert [s["column"] for s in bundle["leakage_suspects"]] == ["district"]
+
+
+def test_noise_categoricals_with_many_small_levels_are_not_flagged():
+    rng = np.random.RandomState(22)
+    n = 20_000
+    X = pd.DataFrame({f"c{i}": rng.randint(0, 250, n).astype(str) for i in range(200)})
+    y = rng.randint(0, 2, n)
+    assert find_leaky_features(X, y, [0, 1], categorical=list(X.columns)) == []
+
+
+@pytest.mark.parametrize("n", [60, 400, 1500])
+def test_noise_categoricals_near_the_support_floor_are_not_flagged(n):
+    rng = np.random.RandomState(23)
+    X = pd.DataFrame({f"c{i}": rng.randint(0, max(2, n // 6), n).astype(str) for i in range(100)})
+    y = (rng.rand(n) < 0.2).astype(int)
+    assert find_leaky_features(X, y, [0, 1], categorical=list(X.columns)) == []
+
+
+def test_integer_coded_category_recoded_into_target_is_flagged():
+    rng = np.random.RandomState(24)
+    n = 3000
+    code = rng.randint(1, 11, n)
+    df = pd.DataFrame({"noise": rng.normal(size=n), "q12_code": code})
+    df["y"] = np.where(np.isin(code, [2, 5, 7]), "yes", "no")
+    found = _suspects(df, "y")
+    assert _columns(found) == ["q12_code"]
+    assert "{2, 5, 7} -> 'yes'" in found[0]["rule"]
+
+
+def test_integer_code_with_missing_as_own_category_is_flagged():
+    rng = np.random.RandomState(25)
+    n = 1000
+    code = rng.randint(1, 6, n).astype(float)
+    code[rng.rand(n) < 0.1] = np.nan
+    X = pd.DataFrame({"q": code})
+    y = np.isin(code, [1, 3]) | np.isnan(code)
+    found = find_leaky_features(X, y.astype(int), ["no", "yes"], categorical=[])
+    assert _columns(found) == ["q"]
+    assert "missing" in found[0]["rule"]
+
+
+def test_noise_integer_codes_are_not_flagged():
+    rng = np.random.RandomState(26)
+    for n in (30, 100, 2000):
+        X = pd.DataFrame({f"q{i}": rng.randint(0, 20, n).astype(float) for i in range(100)})
+        y = (rng.rand(n) < 0.3).astype(int)
+        assert find_leaky_features(X, y, [0, 1], categorical=[]) == []
+
+
+def test_numeric_with_more_than_20_values_gets_no_category_map():
+    rng = np.random.RandomState(27)
+    n = 2000
+    code = rng.randint(0, 30, n)
+    X = pd.DataFrame({"q": code.astype(float)})
+    y = np.isin(code, [2, 5, 7, 11, 19, 23]).astype(int)
+    assert find_leaky_features(X, y, [0, 1], categorical=[]) == []
+
+
 def test_tiny_dataset_is_skipped():
     df = _noise_frame(n=24)
     df["y"] = np.where(df["a"] > 0, "yes", "no")
