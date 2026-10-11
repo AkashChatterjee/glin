@@ -55,6 +55,7 @@ Then check the install:
 
 ```bash
 glin --help
+glin --version
 ```
 
 ### Install as a Claude Code plugin
@@ -136,6 +137,8 @@ Add glin to the config of your MCP client, for example Claude Desktop or Cursor.
   }
 }
 ```
+
+The server gives the glin version in `serverInfo.version`. `glin serve` writes only MCP messages to stdout. Log messages go to stderr. During `serve`, glin sets the log level of the `interpret` library to WARNING, so each training does not fill the client log.
 
 ## Tools exposed over MCP
 
@@ -221,7 +224,7 @@ These checks have two known limits. Both need write access inside an allowed dir
 
 Thus, do not allow a directory that untrusted users or processes can write to.
 
-The older flag `--mode stdio` is still accepted so that existing client configs keep working. glin ignores it. You can remove it from `args`.
+The older flag `--mode stdio` is still accepted so that existing client configs keep working. glin ignores it and writes one deprecation notice to stderr. You can remove it from `args`. `--mode http` and `--mode sse` stop with exit code 2 and this message: "HTTP mode was removed in v0.1.4; v0.1.3 is the last release with it. glin runs over stdio only."
 
 ## Let an agent tune the model
 

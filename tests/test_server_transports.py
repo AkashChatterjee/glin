@@ -1,5 +1,8 @@
 import asyncio
+import json
+import logging
 import re
+import subprocess
 import sys
 
 import numpy as np
@@ -8,6 +11,7 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+import glin
 from glin import engine, server
 from tests.mcp_compat import call_structured
 
@@ -383,7 +387,9 @@ async def test_stdio_real_mcp_client_round_trip(models_root):
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
-            await session.initialize()
+            init = await session.initialize()
+            info = getattr(init, "serverInfo", None) or init.server_info
+            assert (info.name, info.version) == ("glin", glin.__version__)
 
             tools = await session.list_tools()
             assert {t.name for t in tools.tools} == {
@@ -404,6 +410,48 @@ async def test_stdio_real_mcp_client_round_trip(models_root):
             )
             structured = getattr(result, "structuredContent", None) or result.structured_content
             assert structured["predicted_class"] in ("Yes", "No")
+
+
+def test_serve_mode_stdio_keeps_stdout_pure_json_rpc(tmp_path):
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "glin.cli", "serve", "--mode", "stdio"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=tmp_path,
+        text=True,
+    )
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"},
+        },
+    }
+    try:
+        stdout, stderr = proc.communicate(json.dumps(initialize) + "\n", timeout=300)
+    finally:
+        proc.kill()
+    messages = [json.loads(line) for line in stdout.splitlines()]
+    assert [m["id"] for m in messages] == [1]
+    assert messages[0]["result"]["serverInfo"]["version"] == glin.__version__
+    assert stderr.count("--mode is deprecated") == 1
+
+
+def test_run_stdio_quiets_interpret_logging(monkeypatch, tmp_path):
+    logger = logging.getLogger("interpret")
+    previous = logger.level
+    ran = []
+    monkeypatch.setattr(server.MCPServer, "run", lambda self, transport: ran.append(transport))
+    try:
+        server.run_stdio(models_root=tmp_path)
+        assert ran == ["stdio"]
+        assert logger.getEffectiveLevel() == logging.WARNING
+    finally:
+        logger.setLevel(previous)
 
 
 def test_all_tools_have_annotations(tmp_path):

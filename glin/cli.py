@@ -13,6 +13,7 @@ from glin.validation import validate_dataset
 
 
 @click.group()
+@click.version_option(package_name="glin-ml")
 def main() -> None:
     """glin: instant, exactly-explainable statistical classifiers for AI agents."""
 
@@ -203,13 +204,23 @@ def delete(name: str, yes: bool) -> None:
 )
 @click.option(
     "--mode",
-    type=click.Choice(["stdio"]),
-    default="stdio",
+    type=click.Choice(["stdio", "http", "sse"]),
+    default=None,
     hidden=True,
     help="Deprecated and ignored: stdio is the only transport.",
 )
-def serve(allow_dirs: tuple[Path, ...], max_file_mb: float, mode: str) -> None:
+def serve(allow_dirs: tuple[Path, ...], max_file_mb: float, mode: str | None) -> None:
     """Run the glin MCP server over stdio, for local MCP clients."""
+    if mode in ("http", "sse"):
+        raise click.UsageError(
+            "HTTP mode was removed in v0.1.4; v0.1.3 is the last release with it. "
+            "glin runs over stdio only."
+        )
+    if mode == "stdio":
+        click.echo(
+            "glin: --mode is deprecated and ignored; remove it from the server args.",
+            err=True,
+        )
     server.run_stdio(allowed_dirs=list(allow_dirs) or None, max_file_mb=max_file_mb)
 
 
