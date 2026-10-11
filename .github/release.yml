@@ -1,0 +1,21 @@
+# Groups for "Generate release notes" on GitHub. The publish workflow uses
+# CHANGELOG.md for the release text; use this for a draft to compare with it.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+  categories:
+    - title: Added
+      labels:
+        - enhancement
+    - title: Fixed
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other changes
+      labels:
+        - "*"

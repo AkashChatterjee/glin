@@ -1,8 +1,8 @@
 name: Publish to PyPI
 
-# Push a tag like v0.1.3 and that exact version is built and published.
-# The package version is derived from the git tag (hatch-vcs), so there is
-# nothing to bump or commit first.
+# Push a tag like v0.1.4 and that exact version is built and published.
+# The package version is derived from the git tag (hatch-vcs). CHANGELOG.md
+# must have a section for the version; it becomes the GitHub Release notes.
 on:
   push:
     tags:
@@ -42,10 +42,30 @@ jobs:
           test -f "dist/glin_ml-${VERSION}-py3-none-any.whl"
           test -f "dist/glin_ml-${VERSION}.tar.gz"
 
+      - name: Extract the release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > release-notes.md
+          grep -q '[^[:space:]]' release-notes.md || {
+            echo "CHANGELOG.md has no section for ${VERSION}"; exit 1; }
+          cat release-notes.md
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
           if-no-files-found: error
 
   publish:
@@ -64,3 +84,19 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file release-notes.md --verify-tag
