@@ -49,7 +49,7 @@ pipx install glin-ml        # same result, with pipx
 pip install glin-ml         # installs into the active environment
 ```
 
-To read Excel files (`.xlsx` and `.xls`), install the optional extra: `uv tool install 'glin-ml[excel]'` or `pip install 'glin-ml[excel]'`. See [Excel input](#excel-input-xlsx--xls).
+To read Excel files (`.xlsx` and `.xls`), install the optional extra: `uv tool install 'glin-ml[excel]'` or `pip install 'glin-ml[excel]'`. If you run the server with uvx, use `uvx --from 'glin-ml[excel]' glin serve`. See [Excel input](#excel-input-xlsx--xls).
 
 Then check the install:
 
@@ -116,9 +116,10 @@ glin train report.xlsx --sheet "Data 2023" --target outcome --name r_v1    # nam
 glin train report.xlsx --sheet 2 --header-rows 3-4 --target outcome --name r_v1
 ```
 
-- **Sheet:** `--sheet` takes a name or a 1-based position. A workbook with one sheet needs no flag. A workbook with several sheets and no `--sheet` gives an error that lists the sheets.
-- **Header detection:** Without `--header-rows`, glin finds the first row that is mostly filled and looks like labels. It skips title rows above it, blank rows and single-cell footnotes at the end. If the choice is not clear, glin stops with an error. The error names the rows and asks for `--header-rows`. glin does not guess. Two cases are not clear. In the first, a sparse group-label row sits next to the header row. In the second, the first full row looks like data.
-- **`--header-rows`:** Use 1-based row numbers as shown in Excel: `4`, `3-4` or `3,4`. glin joins a multi-row header into one name for each column with ` - `, for example `2023 - sales`. A blank cell in an upper header row continues the label from the cell on its left (merged group headers). glin drops blanks and repeated parts. Duplicate names get the suffixes `_2` and `_3`. Data starts below the last header row. glin prints the sheet, the header rows and the number of rows it read.
+- **Sheet:** `--sheet` takes a name or a 1-based position. A workbook with one sheet needs no flag. A workbook with several sheets and no `--sheet` gives an error that lists the sheets. glin ignores case and spaces at the start and end of a name only if one sheet matches. If two or more sheets match (for example `Data` and `data `), glin gives an error that lists them. Then use the exact name or the position.
+- **Header detection:** Without `--header-rows`, glin finds the first row that is mostly filled and looks like labels. It skips title rows above it. If the choice is not clear, glin stops with an error. The error names the rows and asks for `--header-rows`. glin does not guess. Two cases are not clear. In the first, a sparse group-label row sits next to the header row. In the second, the first full row looks like data.
+- **Footnotes:** glin drops footnote rows at the end of the sheet. A footnote row has text in half of the columns or fewer, and no numbers. Its first filled cell starts with `Source`, `Note`, `Footnote`, `*`, `†`, `‡` or `©`, or it is a sentence of six words or more. glin does the same for all column counts. A sparse last row that does not look like a note stays as data. glin gives a warning with the sheet row numbers of the rows that it dropped.
+- **`--header-rows`:** Use 1-based row numbers as shown in Excel: `4`, `3-4` or `3,4`. glin joins a multi-row header into one name for each column with ` - `, for example `2023 - sales`. A blank cell in an upper header row continues the label from the cell on its left (merged group headers). glin drops blanks and repeated parts. Duplicate names get the suffixes `_2` and `_3`. A header cell that holds a date becomes an ISO date, for example `2024-01-01`. Data starts below the last header row. glin prints the sheet, the header rows and the number of rows it read.
 - **Formulas:** glin uses the cached results of the cells. A spreadsheet app must calculate and save the formulas first.
 - **Empty rows and columns:** glin drops fully empty rows and columns.
 - **CSV files:** CSV behavior does not change. `--sheet` and `--header-rows` are errors for CSV files.

@@ -1,3 +1,4 @@
+import datetime
 import sys
 
 import pandas as pd
@@ -37,10 +38,15 @@ def test_parse_header_rows_forms():
     assert parse_header_rows(range(2, 4)) == [2, 3]
 
 
-@pytest.mark.parametrize("bad", [0, "abc", "5-3", [1, 3], [1.5], True, "3-"])
+@pytest.mark.parametrize("bad", [0, "abc", "5-3", [1, 3], [1.5], True, "3-", []])
 def test_parse_header_rows_rejects_bad_input(bad):
     with pytest.raises(ValueError):
         parse_header_rows(bad)
+
+
+def test_empty_header_rows_list_has_clear_message():
+    with pytest.raises(ValueError, match="header_rows is empty"):
+        parse_header_rows([])
 
 
 def test_single_sheet_clean_header_is_autodetected(tmp_path):
@@ -63,6 +69,49 @@ def test_banner_rows_and_footnotes_are_skipped(tmp_path):
     assert len(table.df) == 30
     assert table.header_rows == [4]
     assert table.df["count"].iloc[-1] == 29
+
+
+def test_banner_footnote_warning_gives_sheet_row(tmp_path):
+    path = make_workbook(tmp_path / "banner.xlsx", {"Data": banner_sheet()})
+    (warning,) = load_table(path).warnings
+    assert "1 footnote row(s)" in warning and "sheet row(s) 36" in warning
+
+
+def test_two_cell_footnote_is_dropped(tmp_path):
+    rows = [["region", "count", "score", "outcome"], *_data_rows(), ["Source:", "Dept of Stuff"]]
+    path = make_workbook(tmp_path / "f.xlsx", {"S": (rows, [])})
+    table = load_table(path)
+    assert len(table.df) == 30
+    assert "Dept of Stuff" not in table.df["count"].tolist()
+    assert "sheet row(s) 32" in table.warnings[0]
+
+
+def test_footnote_is_dropped_on_two_column_sheet(tmp_path):
+    rows = [["x", "target"], *[[i, "y" if i % 2 else "n"] for i in range(10)]]
+    rows += [[], ["Source: thing"], ["Figures may not add up because of rounding"]]
+    path = make_workbook(tmp_path / "f.xlsx", {"S": (rows, [])})
+    table = load_table(path)
+    assert len(table.df) == 10
+    assert table.df["x"].dtype.kind == "i"
+    assert "sheet row(s) 13, 14" in table.warnings[0]
+
+
+@pytest.mark.parametrize(
+    "last", [[99, None, None, None], ["r1", None, None, None], [None, "Notebook"]]
+)
+def test_sparse_final_data_row_is_kept(tmp_path, last):
+    rows = [["region", "count", "score", "outcome"], *_data_rows(), last]
+    path = make_workbook(tmp_path / "f.xlsx", {"S": (rows, [])})
+    table = load_table(path)
+    assert len(table.df) == 31
+    assert table.warnings == []
+
+
+def test_date_header_cells_become_iso_dates(tmp_path):
+    jan, feb = datetime.date(2024, 1, 1), datetime.datetime(2024, 2, 1, 9, 30)
+    rows = [["name", jan, feb], *[[f"k{i}", i, i] for i in range(5)]]
+    path = make_workbook(tmp_path / "d.xlsx", {"S": (rows, [])})
+    assert load_table(path).df.columns.tolist() == ["name", "2024-01-01", "2024-02-01 09:30:00"]
 
 
 def test_missing_cells_in_data_are_kept_as_nan(tmp_path):
@@ -177,6 +226,23 @@ def test_unknown_sheet_lists_available(two_sheets):
         load_table(two_sheets, sheet=3)
 
 
+def test_sheet_name_that_matches_several_sheets_is_ambiguous(tmp_path):
+    sheets = {"Notes": ([["x"]], []), "Data": banner_sheet(), "data ": banner_sheet()}
+    path = make_workbook(tmp_path / "s.xlsx", sheets)
+    with pytest.raises(ValueError, match="'data' is ambiguous") as exc:
+        load_table(path, sheet="data")
+    assert "'Data', 'data '" in str(exc.value)
+    assert load_table(path, sheet="Data").sheet == "Data"
+
+
+def test_cli_option_names_in_messages(tmp_path, two_sheets):
+    with pytest.raises(ValueError, match="--sheet") as exc:
+        load_table(two_sheets, options=loaders.CLI_OPTIONS)
+    assert "sheet=" not in str(exc.value)
+    with pytest.raises(ValueError, match="--header-rows"):
+        load_table(two_sheets, sheet=2, header_rows="x", options=loaders.CLI_OPTIONS)
+
+
 def test_csv_is_unchanged_and_rejects_excel_options(tmp_path):
     path = tmp_path / "d.csv"
     path.write_text("a,b\n1,2\n3,4\n")
@@ -195,6 +261,8 @@ def test_missing_openpyxl_gives_install_hint(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match=r"glin-ml\[excel\]") as exc:
         load_table(path)
     assert "openpyxl" in str(exc.value)
+    assert "pip install 'glin-ml[excel]'" in str(exc.value)
+    assert "uvx --from 'glin-ml[excel]' glin serve" in str(exc.value)
 
 
 def test_missing_xlrd_gives_install_hint(tmp_path, monkeypatch):

@@ -65,6 +65,33 @@ async def test_train_model_sheet_and_multi_row_header_options(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_footnote_rows_are_dropped_and_reported(tmp_path):
+    rows = [["age", "plan", "churn"], *churn_rows(), ["Source:", "Dept of Stuff"]]
+    path = make_workbook(tmp_path / "f.xlsx", {"Data": (rows, [])})
+    result = await _train(tmp_path / "models", [tmp_path], path, holdout_fraction=0)
+    assert result["rows_read"] == 200
+    assert set(result["target_classes"]) == {"Yes", "No"}
+    assert any("sheet row(s) 202" in w for w in result["warnings"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        ({"sheet": True}, "sheet must not be true or false"),
+        ({"header_rows": True}, "header_rows must not be true or false"),
+        ({"header_rows": [True]}, "header_rows must not be true or false"),
+        ({"header_rows": []}, "header_rows is empty"),
+    ],
+)
+async def test_train_model_rejects_bool_and_empty_excel_options(
+    tmp_path, messy_xlsx, extra, message
+):
+    with pytest.raises(ToolError, match=message):
+        await _train(tmp_path / "models", [tmp_path], messy_xlsx, **extra)
+
+
+@pytest.mark.asyncio
 async def test_excel_path_obeys_allowed_dirs_and_symlink_rules(tmp_path, messy_xlsx):
     allowed = tmp_path / "allowed"
     allowed.mkdir()
@@ -146,7 +173,7 @@ def test_cli_train_sheet_and_header_rows_options(tmp_path, monkeypatch):
     args = ["train", str(path), "--target", "churn", "--name", "xl", "--quiet"]
     missing = CliRunner().invoke(cli.main, args)
     assert missing.exit_code != 0
-    assert "2 sheets" in missing.output
+    assert "2 sheets" in missing.output and "--sheet" in missing.output
 
     ok = CliRunner().invoke(cli.main, [*args, "--sheet", "B", "--header-rows", "1-2"])
     assert ok.exit_code == 0, ok.output
@@ -161,5 +188,14 @@ def test_cli_train_ambiguous_header_is_a_clean_error(tmp_path, monkeypatch):
         cli.main, ["train", str(path), "--target", "churn", "--name", "xl", "--quiet"]
     )
     assert result.exit_code != 0
-    assert "ambiguous" in result.output and "header_rows" in result.output
+    assert "ambiguous" in result.output and "--header-rows" in result.output
     assert "Traceback" not in result.output
+
+
+def test_cli_train_prints_footnote_warning(tmp_path, monkeypatch, messy_xlsx):
+    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
+    result = CliRunner().invoke(
+        cli.main, ["train", str(messy_xlsx), "--target", "churn", "--name", "xl", "--quiet"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Warning: dropped 1 footnote row(s)" in result.output

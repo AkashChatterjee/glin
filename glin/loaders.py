@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import datetime
 import math
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
@@ -16,7 +17,9 @@ import numpy as np
 import pandas as pd
 
 EXCEL_SUFFIXES = (".xlsx", ".xls")
-EXCEL_INSTALL_HINT = "pip install 'glin-ml[excel]'"
+EXCEL_INSTALL_HINT = (
+    "pip install 'glin-ml[excel]' (with uvx: uvx --from 'glin-ml[excel]' glin serve)"
+)
 
 HeaderRows = Union[int, str, Sequence[int], None]
 SheetRef = Union[int, str, None]
@@ -27,6 +30,22 @@ _HEADER_FILL_RATIO = 0.6
 _LABEL_RATIO = 0.8
 _YEAR_RANGE = (1800, 2100)
 _HEADER_SEPARATOR = " - "
+# A trailing row is a footnote if its text starts with one of these or is a
+# sentence of at least _NOTE_MIN_WORDS words.
+_NOTE_START = re.compile(r"(sources?|notes?|footnotes?)\b|[*†‡©]", re.IGNORECASE)
+_NOTE_MIN_WORDS = 6
+
+
+@dataclass(frozen=True)
+class OptionNames:
+    """How messages name the Excel options: MCP arguments or CLI flags."""
+
+    sheet: str = "sheet"
+    header_rows: str = "header_rows"
+
+
+MCP_OPTIONS = OptionNames()
+CLI_OPTIONS = OptionNames("--sheet", "--header-rows")
 
 
 @dataclass
@@ -34,6 +53,7 @@ class LoadedTable:
     df: pd.DataFrame
     sheet: Optional[str] = None
     header_rows: Optional[list[int]] = None
+    warnings: list[str] = field(default_factory=list)
 
 
 def is_excel_path(path: Union[str, Path]) -> bool:
@@ -41,51 +61,66 @@ def is_excel_path(path: Union[str, Path]) -> bool:
 
 
 def load_table(
-    path: Union[str, Path], sheet: SheetRef = None, header_rows: HeaderRows = None
+    path: Union[str, Path],
+    sheet: SheetRef = None,
+    header_rows: HeaderRows = None,
+    options: OptionNames = MCP_OPTIONS,
 ) -> LoadedTable:
     """Load a table. `.xlsx` / `.xls` go through the Excel reader; anything
-    else is read as a CSV. `sheet` and `header_rows` apply to Excel only."""
+    else is read as a CSV. `sheet` and `header_rows` apply to Excel only.
+    `options` sets how error messages name those two options."""
     path = Path(path)
     if not is_excel_path(path):
         if sheet is not None or header_rows is not None:
-            raise ValueError("sheet and header_rows only apply to .xlsx / .xls files")
+            raise ValueError(
+                f"{options.sheet} and {options.header_rows} only apply to "
+                ".xlsx / .xls files"
+            )
         return LoadedTable(pd.read_csv(path))
-    return _load_excel(path, sheet, header_rows)
+    return _load_excel(path, sheet, header_rows, options)
 
 
-def parse_header_rows(spec: HeaderRows) -> Optional[list[int]]:
+def parse_header_rows(
+    spec: HeaderRows, options: OptionNames = MCP_OPTIONS
+) -> Optional[list[int]]:
     """Normalise `header_rows` to a sorted list of consecutive 1-based rows.
     Accepts 4, "4", "3-4", "3,4" or [3, 4]."""
+    name = options.header_rows
     if spec is None or (isinstance(spec, str) and not spec.strip()):
         return None
     if isinstance(spec, bool):
-        raise ValueError("header_rows must be a row number, a range like '3-4', or a list")
+        raise ValueError(f"{name} must be a row number, a range like '3-4', or a list")
     if isinstance(spec, int):
         rows = [spec]
     elif isinstance(spec, str):
-        rows = _parse_header_rows_text(spec)
+        rows = _parse_header_rows_text(spec, name)
     else:
         try:
-            rows = [_as_row_number(r) for r in spec]
+            rows = [_as_row_number(r, name) for r in spec]
         except TypeError:
             raise ValueError(
-                "header_rows must be a row number, a range like '3-4', or a list"
+                f"{name} must be a row number, a range like '3-4', or a list"
             ) from None
-    if not rows or any(r < 1 for r in rows):
-        raise ValueError("header_rows are 1-based sheet row numbers (as shown in Excel)")
+        if not rows:
+            raise ValueError(
+                f"{name} is empty; give at least one row number, or omit it to "
+                "detect the header"
+            )
+    if any(r < 1 for r in rows):
+        raise ValueError(f"{name} are 1-based sheet row numbers (as shown in Excel)")
     rows = sorted(set(rows))
     if rows != list(range(rows[0], rows[-1] + 1)):
-        raise ValueError(f"header_rows must be consecutive rows, got {rows}")
+        raise ValueError(f"{name} must be consecutive rows, got {rows}")
     return rows
 
 
-def _as_row_number(value: Any) -> int:
+def _as_row_number(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-        raise ValueError(f"header_rows entries must be integers, got {value!r}")
+        raise ValueError(f"{name} entries must be integers, got {value!r}")
     return int(value)
 
 
-def _parse_header_rows_text(text: str) -> list[int]:
+def _parse_header_rows_text(text: str, name: str) -> list[int]:
     text = text.strip()
     try:
         if "-" in text:
@@ -96,13 +131,15 @@ def _parse_header_rows_text(text: str) -> list[int]:
         return [int(p) for p in text.split(",")]
     except ValueError:
         raise ValueError(
-            f"could not parse header_rows {text!r}; use a row number, a range "
+            f"could not parse {name} {text!r}; use a row number, a range "
             "like '3-4', or a comma list like '3,4' (1-based sheet rows)"
         ) from None
 
 
-def _load_excel(path: Path, sheet: SheetRef, header_rows: HeaderRows) -> LoadedTable:
-    explicit = parse_header_rows(header_rows)
+def _load_excel(
+    path: Path, sheet: SheetRef, header_rows: HeaderRows, options: OptionNames
+) -> LoadedTable:
+    explicit = parse_header_rows(header_rows, options)
     try:
         workbook = pd.ExcelFile(path)
     except ImportError as exc:
@@ -114,13 +151,12 @@ def _load_excel(path: Path, sheet: SheetRef, header_rows: HeaderRows) -> LoadedT
             f"{path.suffix.lower()}"
         ) from None
     with workbook:
-        sheet_name = _resolve_sheet(workbook.sheet_names, sheet)
+        sheet_name = _resolve_sheet(workbook.sheet_names, sheet, options.sheet)
         try:
             raw = workbook.parse(sheet_name, header=None, dtype=object)
         except ImportError as exc:
             raise ValueError(_missing_dependency_message(path, exc)) from None
-    df, used_rows = _extract_table(raw, explicit, sheet_name)
-    return LoadedTable(df, sheet_name, used_rows)
+    return _extract_table(raw, explicit, sheet_name, options)
 
 
 def _missing_dependency_message(path: Path, exc: ImportError) -> str:
@@ -133,17 +169,17 @@ def _missing_dependency_message(path: Path, exc: ImportError) -> str:
     )
 
 
-def _resolve_sheet(names: list[str], sheet: SheetRef) -> str:
+def _resolve_sheet(names: list[str], sheet: SheetRef, option: str) -> str:
     listing = "; ".join(f"{i}. {name!r}" for i, name in enumerate(names, 1))
     if sheet is None or (isinstance(sheet, str) and not sheet.strip()):
         if len(names) == 1:
             return names[0]
         raise ValueError(
-            f"workbook has {len(names)} sheets; choose one with sheet=<name or "
-            f"1-based position>. Available: {listing}"
+            f"workbook has {len(names)} sheets; choose one with {option} (a name "
+            f"or 1-based position). Available: {listing}"
         )
     if isinstance(sheet, bool):
-        raise ValueError("sheet must be a sheet name or a 1-based position")
+        raise ValueError(f"{option} must be a sheet name or a 1-based position")
     if isinstance(sheet, int):
         if 1 <= sheet <= len(names):
             return names[sheet - 1]
@@ -153,8 +189,15 @@ def _resolve_sheet(names: list[str], sheet: SheetRef) -> str:
     folded = [n for n in names if n.strip().casefold() == sheet.strip().casefold()]
     if len(folded) == 1:
         return folded[0]
+    if folded:
+        matches = ", ".join(repr(n) for n in folded)
+        raise ValueError(
+            f"sheet name {sheet!r} is ambiguous: it matches {matches} when case and "
+            f"outer spaces are ignored. Give {option} the exact name or a 1-based "
+            f"position. Available: {listing}"
+        )
     if sheet.strip().isdigit():
-        return _resolve_sheet(names, int(sheet))
+        return _resolve_sheet(names, int(sheet), option)
     raise ValueError(f"no sheet named {sheet!r}. Available: {listing}")
 
 
@@ -182,47 +225,77 @@ def _clean_cells(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def _extract_table(
-    raw: pd.DataFrame, explicit: Optional[list[int]], sheet_name: str
-) -> tuple[pd.DataFrame, list[int]]:
+    raw: pd.DataFrame,
+    explicit: Optional[list[int]],
+    sheet_name: str,
+    options: OptionNames,
+) -> LoadedTable:
     cells = _clean_cells(raw)
     counts = cells.notna().sum(axis=1)
     if cells.empty or not counts.any():
         raise ValueError(f"sheet {sheet_name!r} is empty")
 
     if explicit is None:
-        explicit = [_detect_header_row(cells, counts, sheet_name) + 1]
+        explicit = [_detect_header_row(cells, counts, sheet_name, options) + 1]
     elif explicit[-1] > len(cells):
         raise ValueError(
-            f"header_rows {explicit} is beyond the last row ({len(cells)}) of "
+            f"{options.header_rows} {explicit} is beyond the last row ({len(cells)}) of "
             f"sheet {sheet_name!r}"
         )
 
     first, last = explicit[0] - 1, explicit[-1] - 1
     names = _flatten_headers(cells.iloc[first : last + 1])
     body = cells.iloc[last + 1 :]
-    body = _drop_footer_rows(body)
+    body, footnotes = _split_footnotes(body)
     body = body.dropna(how="all")
     if body.empty:
         raise ValueError(
             f"no data rows below header row(s) {explicit} in sheet {sheet_name!r}"
         )
+    warnings = []
+    if footnotes:
+        rows = ", ".join(str(r) for r in footnotes)
+        warnings.append(
+            f"dropped {len(footnotes)} footnote row(s) at the end of sheet "
+            f"{sheet_name!r} (sheet row(s) {rows}); they hold only note text, such "
+            "as 'Source: ...'"
+        )
     body = body.copy()
     body.columns = names
-    return body.reset_index(drop=True).infer_objects(), explicit
+    df = body.reset_index(drop=True).infer_objects()
+    return LoadedTable(df, sheet_name, explicit, warnings)
 
 
-def _drop_footer_rows(body: pd.DataFrame) -> pd.DataFrame:
-    """Trailing single-cell rows (footnotes, 'Source: ...') are not data."""
-    if body.shape[1] < 3:
-        return body
-    counts = body.notna().sum(axis=1).to_numpy()
-    keep = len(counts)
-    while keep > 0 and counts[keep - 1] <= 1:
+def _split_footnotes(body: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
+    """Strip trailing footnote rows (see _is_footnote); blank rows between
+    them are skipped. Returns the rest and the dropped 1-based sheet rows."""
+    keep = len(body)
+    dropped: list[int] = []
+    while keep > 0:
+        row = body.iloc[keep - 1]
+        if row.notna().any():
+            if not _is_footnote(row):
+                break
+            dropped.append(int(body.index[keep - 1]) + 1)
         keep -= 1
-    return body.iloc[:keep]
+    return body.iloc[:keep], sorted(dropped)
 
 
-def _detect_header_row(cells: pd.DataFrame, counts: pd.Series, sheet_name: str) -> int:
+def _is_footnote(row: pd.Series) -> bool:
+    """Mostly empty (at most half the columns, rounded up), all text, and the
+    first filled cell reads like a note."""
+    values = row.dropna()
+    if len(values) > math.ceil(row.size / 2):
+        return False
+    if not all(isinstance(v, str) for v in values):
+        return False
+    first = values.iloc[0]
+    return bool(_NOTE_START.match(first)) or len(first.split()) >= _NOTE_MIN_WORDS
+
+
+def _detect_header_row(
+    cells: pd.DataFrame, counts: pd.Series, sheet_name: str, options: OptionNames
+) -> int:
     """0-based index of the single header row, or ValueError when unclear."""
     window = counts.iloc[:_HEADER_SCAN_ROWS]
     populated = counts[counts > 0]
@@ -230,8 +303,8 @@ def _detect_header_row(cells: pd.DataFrame, counts: pd.Series, sheet_name: str) 
     width = int(modal[modal == modal.max()].index.max())
     threshold = max(2, math.ceil(_HEADER_FILL_RATIO * width))
     hint = (
-        "Pass header_rows=<row number or range such as '3-4'> "
-        "(1-based, as numbered in Excel)."
+        f"Set {options.header_rows} to the header row number or a range such as "
+        "'3-4' (1-based, as numbered in Excel)."
     )
 
     candidates = window[window >= threshold]
@@ -299,6 +372,13 @@ def _preview(values: pd.Series, limit: int = 4) -> str:
 def _header_text(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         value = int(value)
+    elif isinstance(value, datetime.datetime):
+        if value.time() == datetime.time():
+            value = value.date().isoformat()
+        else:
+            value = value.isoformat(sep=" ")
+    elif isinstance(value, datetime.date):
+        value = value.isoformat()
     return " ".join(str(value).split())
 
 

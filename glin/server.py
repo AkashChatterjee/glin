@@ -7,10 +7,11 @@ import io
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 import pandas as pd
 from mcp.types import ToolAnnotations
+from pydantic import BeforeValidator
 
 from glin import __version__, engine, prompts
 from glin.engine import DEFAULT_MODELS_ROOT
@@ -38,6 +39,22 @@ def _new_server() -> MCPServer:
     mcp = MCPServer("glin")
     mcp._mcp_server.version = __version__  # mcp 1.x reports its own version otherwise
     return mcp
+
+
+def _reject_bool(name: str):
+    """JSON true/false would otherwise coerce to 1/0 (sheet 1, header row 1)."""
+
+    def check(value: Any) -> Any:
+        items = value if isinstance(value, list) else [value]
+        if any(isinstance(v, bool) for v in items):
+            raise ValueError(f"{name} must not be true or false")
+        return value
+
+    return BeforeValidator(check)
+
+
+SheetArg = Annotated[SheetRef, _reject_bool("sheet")]
+HeaderRowsArg = Annotated[HeaderRows, _reject_bool("header_rows")]
 
 
 def default_allowed_dirs() -> list[Path]:
@@ -218,8 +235,8 @@ def build_server(
         holdout_fraction: float = 0.2,
         holdout_group_column: Optional[str] = None,
         suppression_codes: Optional[list[str]] = None,
-        sheet: SheetRef = None,
-        header_rows: HeaderRows = None,
+        sheet: SheetArg = None,
+        header_rows: HeaderRowsArg = None,
     ) -> dict[str, Any]:
         """Train an EBM classifier from a CSV or Excel file and save it as model_name. This
         is also how to retrain an existing model: pass overwrite=True to
@@ -245,7 +262,9 @@ def build_server(
         Excel only (csv_path ending in .xlsx/.xls): `sheet` picks the sheet
         by name or 1-based position (required when the workbook has several
         sheets). The header row is auto-detected, skipping title/banner rows
-        and trailing footnotes; if that is ambiguous the error says so. For
+        and trailing footnote rows (mostly empty rows whose text starts with
+        Source, Note, *, or is a long sentence; `warnings` names the dropped
+        rows); if that is ambiguous the error says so. For
         multi-row or merged headers set `header_rows` to the 1-based sheet
         row numbers as shown in Excel: 4, "3-4" or [3, 4]; they are
         flattened into unique column names and data starts below them. The
@@ -348,7 +367,7 @@ def build_server(
             "features_kept": preprocessor.output_columns_,
             "features_dropped": preprocessor.dropped_columns_,
             "date_columns": preprocessor.date_feature_names_,
-            "warnings": bundle["warnings"],
+            "warnings": (source.warnings if source else []) + bundle["warnings"],
             "hyperparameters": bundle["hyperparameters"],
             "holdout_fraction": bundle["holdout_fraction"],
             "holdout_group_column": bundle["holdout_group_column"],
