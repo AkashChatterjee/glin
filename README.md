@@ -10,6 +10,8 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
 
 > glin runs locally only (stdio). It has no remote or HTTP mode. Version 0.1.3 is the last release that had one.
 
+**Changelog:** [CHANGELOG.md](https://github.com/AkashChatterjee/glin/blob/main/CHANGELOG.md) lists the changes in each release.
+
 **Case study:** [Child stunting across Indian districts (NFHS-5)](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-child-stunting-nfhs5). A glin model flags districts with high child stunting. Claude calls the model through MCP.
 
 ## Contents
@@ -391,7 +393,7 @@ git tag v0.1.4
 git push origin v0.1.4
 ```
 
-The workflow runs the `Tests` workflow first (the same matrix as for pull requests). If a test fails, the workflow stops and does not publish. Then it builds the sdist and the wheel, and checks that both carry the version of the tag. Then it publishes them to PyPI as `glin-ml` at that exact version.
+The workflow runs the `Tests` workflow first (the same matrix as for pull requests). If a test fails, the workflow stops and does not publish. Then it builds the sdist and the wheel, and checks that both carry the version of the tag. Then it publishes them to PyPI as `glin-ml` at that exact version, and creates the GitHub Release from `CHANGELOG.md`.
 
 - `hatch-vcs` derives the package version from the git tag. `pyproject.toml` has no fixed version, so you do not bump the package version before a release. The plugin and registry files have their own versions (see [Release steps](#release-steps)).
 - An untagged local build gets a dev version such as `0.1.4.dev1+g3fa91a0`. A source tree with no git metadata reports `0.0.0`.
@@ -403,11 +405,15 @@ The workflow runs the `Tests` workflow first (the same matrix as for pull reques
 
 The owner does these steps for each release:
 
-1. Set the release version in `server.json` (`version` and `packages[0].version`) and in `plugins/glin/.claude-plugin/plugin.json` (`version`). If the plugin needs the new release, also change the minimum version in `plugins/glin/.mcp.json`. Merge these changes into `main`.
-2. Tag the release and push the tag, for example `git tag v0.1.4` and `git push origin v0.1.4`.
-3. In GitHub Actions, open the `Publish to PyPI` run and approve the `pypi` environment. The upload step starts only after this approval.
-4. Check that the new version is on PyPI.
-5. Publish to the MCP Registry with `mcp-publisher login github` and `mcp-publisher publish`. See [Publishing to the MCP Registry](#publishing-to-the-mcp-registry).
+1. In `CHANGELOG.md`, move the entries under `[Unreleased]` to a new heading `## [X.Y.Z] - YYYY-MM-DD`. Add the compare link at the bottom. Compare the entries with `gh issue list --milestone vX.Y.Z --state closed`.
+2. Set the release version in `server.json` (`version` and `packages[0].version`) and in `plugins/glin/.claude-plugin/plugin.json` (`version`). If the plugin needs the new release, also change the minimum version in `plugins/glin/.mcp.json`. Merge these changes into `main`.
+3. Tag the release and push the tag, for example `git tag v0.1.4` and `git push origin v0.1.4`.
+4. In GitHub Actions, open the `Publish to PyPI` run and approve the `pypi` environment. The upload step starts only after this approval.
+5. The workflow publishes to PyPI. Then it creates the GitHub Release with the `CHANGELOG.md` section of the version as the notes. If `CHANGELOG.md` has no section for the version, the workflow stops before it publishes.
+6. Check that the new version is on PyPI and that the GitHub Release exists.
+7. Publish to the MCP Registry with `mcp-publisher login github` and `mcp-publisher publish`. See [Publishing to the MCP Registry](#publishing-to-the-mcp-registry).
+
+To compare the changelog with the merged pull requests, open a draft release on GitHub and click "Generate release notes". [`.github/release.yml`](https://github.com/AkashChatterjee/glin/blob/main/.github/release.yml) groups the pull requests by label.
 
 ### One-time setup that makes this the only path
 

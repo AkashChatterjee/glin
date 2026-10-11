@@ -32,6 +32,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/AkashChatterjee/glin"
 Repository = "https://github.com/AkashChatterjee/glin"
+Changelog = "https://github.com/AkashChatterjee/glin/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 excel = [
