@@ -394,7 +394,7 @@ def test_unrecognized_code_warning_is_quiet_when_codes_are_known():
     ],
 )
 def test_unrecognized_code_warning_ignores_non_code_like_leftovers(leftovers):
-    numbers = [str(i) for i in range(100, 160)]
+    numbers = [f"{i}.5" for i in range(100, 160)]
     df = pd.DataFrame({"x": numbers + leftovers, "y": [i % 7 for i in range(60 + len(leftovers))]})
     pre = _fit(df)
     assert "x" in pre.numeric_columns_
@@ -591,6 +591,76 @@ def test_integer_id_with_missing_values_is_dropped():
     values[:5] = np.nan
     pre = _fit(pd.DataFrame({"row_id": values}))
     assert pre.dropped_columns_ == ["row_id"]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.random.default_rng(0).choice(np.arange(20_000, 200_000), N_ROWS, replace=False),
+        np.random.default_rng(1).choice(
+            np.arange(1_600_000_000, 1_700_000_000), N_ROWS, replace=False
+        ),
+        np.random.default_rng(2).choice(np.arange(0, 10**7, 100), N_ROWS, replace=False),
+    ],
+    ids=["salary", "epoch_seconds", "rounded_amount"],
+)
+def test_unique_integer_measurement_is_kept(values):
+    pre = _fit(pd.DataFrame({"salary": values}))
+    assert pre.numeric_columns_ == ["salary"]
+    assert pre.warnings_ == []
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.arange(1, N_ROWS + 1),
+        np.random.RandomState(0).permutation(np.arange(1000, 1000 + N_ROWS)),
+        np.arange(0, 10 * N_ROWS, 10),
+        np.random.RandomState(0).choice(np.arange(1, 2 * N_ROWS), N_ROWS, replace=False),
+    ],
+    ids=["sequential", "shuffled", "constant_step", "half_filled"],
+)
+def test_range_filling_integers_are_dropped_without_id_name(values):
+    pre = _fit(pd.DataFrame({"number": values}))
+    assert pre.dropped_columns_ == ["number"]
+    assert "round or bin" in _warning_for(pre, "number")
+
+
+@pytest.mark.parametrize(
+    "name", ["row_id", "PassengerId", "customerID", "ID", "uuid", "order_key", "index"]
+)
+def test_sparse_unique_integers_with_id_name_are_dropped(name):
+    values = np.random.default_rng(0).choice(np.arange(10**9), N_ROWS, replace=False)
+    pre = _fit(pd.DataFrame({name: values}))
+    assert pre.dropped_columns_ == [name]
+
+
+@pytest.mark.parametrize("name", ["valid", "paid", "body_mass_index", "kidney"])
+def test_id_substring_in_name_is_not_an_id_name(name):
+    values = np.random.default_rng(0).choice(np.arange(10**9), N_ROWS, replace=False)
+    assert _fit(pd.DataFrame({name: values})).numeric_columns_ == [name]
+
+
+def test_object_id_with_one_text_value_is_dropped():
+    ids = [str(i) for i in range(1, N_ROWS)] + ["TBD"]
+    df = pd.DataFrame({"row_id": ids, "x": np.arange(N_ROWS) % 7})
+    pre = _fit(df)
+    assert pre.dropped_columns_ == ["row_id"]
+    assert pre.numeric_columns_ == ["x"]
+    assert "identifier" in _warning_for(pre, "row_id")
+
+
+def test_object_column_of_numeric_strings_uses_integer_id_rule():
+    shuffled = np.random.RandomState(0).permutation(N_ROWS).astype(str)
+    salaries = np.random.default_rng(0).choice(
+        np.arange(20_000, 200_000), N_ROWS, replace=False
+    )
+    df = pd.DataFrame(
+        {"code": shuffled, "salary": [f"${v:,}" for v in salaries[:-1]] + [""]}
+    )
+    pre = _fit(df)
+    assert pre.dropped_columns_ == ["code"]
+    assert pre.numeric_columns_ == ["salary"]
 
 
 def test_uuid_column_is_dropped_with_warning():
