@@ -1,6 +1,7 @@
 {
   "name": "glin",
   "displayName": "glin",
+  "version": "0.1.4",
   "description": "Train, tune, predict with and explain exactly-explainable classifiers on CSV or Excel data, over a local MCP server.",
   "author": {
     "name": "Akash Chatterjee",

@@ -37,6 +37,7 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
   - [Target leakage check](#target-leakage-check)
   - [Target column requirements](#target-column-requirements)
 - [Releasing (maintainers)](#releasing-maintainers)
+  - [Release steps](#release-steps)
 
 ## Install
 
@@ -61,7 +62,7 @@ glin --version
 
 ### Install as a Claude Code plugin
 
-The plugin adds the glin MCP server and a skill. The skill tells the agent when and how to build, tune, predict with and explain a model. The plugin starts the server with [`uvx`](https://docs.astral.sh/uv/), so you must have `uv` installed. You do not need to install glin first.
+The plugin adds the glin MCP server and a skill. The skill tells the agent when and how to build, tune, predict with and explain a model. The plugin starts the server with [`uvx`](https://docs.astral.sh/uv/), so you must have `uv` installed. You do not need to install glin first. The plugin runs `uvx --from 'glin-ml[excel]>=0.1.4' glin serve`. This command includes Excel support, and it does not start a version older than 0.1.4.
 
 In Claude Code, run:
 
@@ -70,11 +71,13 @@ In Claude Code, run:
 /plugin install glin@glin-marketplace
 ```
 
-The files are in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and [`plugins/glin/`](plugins/glin/).
+The files are in [`.claude-plugin/marketplace.json`](https://github.com/AkashChatterjee/glin/blob/main/.claude-plugin/marketplace.json) and [`plugins/glin/`](https://github.com/AkashChatterjee/glin/tree/main/plugins/glin).
 
 ### MCP Registry
 
-The [official MCP Registry](https://registry.modelcontextprotocol.io) lists glin as `io.github.AkashChatterjee/glin`. The metadata is in [`server.json`](server.json). The registry points to the `glin-ml` package on PyPI. The package also installs a `glin-ml` command, which is the same as `glin`, so `uvx glin-ml serve` works.
+After each release, the maintainer publishes glin to the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.AkashChatterjee/glin`. This is a manual step (see [Publishing to the MCP Registry](#publishing-to-the-mcp-registry)). The metadata is in [`server.json`](https://github.com/AkashChatterjee/glin/blob/main/server.json). The registry points to the `glin-ml` package on PyPI. The package also installs a `glin-ml` command, which is the same as `glin`, so `uvx glin-ml serve` works.
+
+The registry entry installs `glin-ml` without the `excel` extra, because the registry format has no field for extras. To read Excel files, set your MCP client to run `uvx --from 'glin-ml[excel]' glin serve` (command `uvx`, arguments `--from`, `glin-ml[excel]`, `glin`, `serve`).
 
 ### Install for development
 
@@ -96,7 +99,7 @@ The `Tests` GitHub Actions workflow ([.github/workflows/test.yml](.github/workfl
 glin train path/to/data.csv --target churn --name churn_v1
 ```
 
-glin saves each model in `~/.glin/models/<name>/`.
+glin saves each model in `~/.glin/models/<name>/`. During training, glin prints a live line that shows the boosting progress. To stop this line, add `--quiet`. The stage messages still print.
 
 ### Model names
 
@@ -171,7 +174,7 @@ Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All t
   - `warnings` lists inputs that the model never saw. Each warning has `feature`, `value` and `issue`. The issue is `unseen_category`, `out_of_range`, `unparseable_number`, `unparseable_date`, `ambiguous_date_format` or `date_order_mismatch`. `out_of_range` warnings also have `training_range`. Date format warnings also have `parsed_as`, the date that glin used. `unparseable_number` is for a numeric input that is not a finite number, for example `abc` or `inf`. glin then treats the input as missing. A blank input or a suppression code does not give this warning. Each `value` is safe for JSON: glin sends `inf` as the string `"inf"`.
   - `missing_features` lists inputs that are absent or blank. These inputs are valid. glin reports them separately.
   - To send a date, pass the raw value, for example `"signup_date": "2024-03-06"`. glin derives the same `signup_date__*` terms as at training time. Contributions name each term, for example `signup_date__day_of_week` = `sat`. A date that is absent, blank or not parseable counts as missing. A date that does not parse also adds a warning.
-- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2, holdout_group_column=None, suppression_codes=None)` trains a new model. It can also retrain an existing model on new data with `overwrite=True`. If the name exists and `overwrite` is not set, the call fails. Nothing is replaced by accident.
+- `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2, holdout_group_column=None, suppression_codes=None, sheet=None, header_rows=None)` trains a new model. It can also retrain an existing model on new data with `overwrite=True`. If the name exists and `overwrite` is not set, the call fails. Nothing is replaced by accident.
   - Pass exactly one of `csv_path` and `csv_content`.
   - `csv_path` is a `.csv`, `.xlsx` or `.xls` file that the server can read. See [Restricting `csv_path`](#restricting-csv_path). Use it for local stdio setups. It works for large files (up to 200 MB by default), and the agent never copies the file contents.
   - `csv_content` is the raw CSV text. Use it only when the client and the server share no file system, and only for small data. Tens of thousands of rows in a tool argument are slow and use a lot of context.
@@ -381,20 +384,30 @@ glin flags such a column in `warnings` as `Possible target leakage: ...`. The wa
 
 ## Releasing (maintainers)
 
-**Only the `Publish to PyPI` GitHub Actions workflow ([.github/workflows/publish.yml](.github/workflows/publish.yml)) publishes releases to PyPI. Nobody uploads from a local machine. Do not use `twine upload`, `uv publish` or personal API tokens.** To release, push a tag of the form `vX.Y.Z`:
+**Only the `Publish to PyPI` GitHub Actions workflow ([`.github/workflows/publish.yml`](https://github.com/AkashChatterjee/glin/blob/main/.github/workflows/publish.yml)) publishes releases to PyPI. Nobody uploads from a local machine. Do not use `twine upload`, `uv publish` or personal API tokens.** To release, push a tag of the form `vX.Y.Z`:
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 The workflow runs the `Tests` workflow first (the same matrix as for pull requests). If a test fails, the workflow stops and does not publish. Then it builds the sdist and the wheel, and checks that both carry the version of the tag. Then it publishes them to PyPI as `glin-ml` at that exact version.
 
-- `hatch-vcs` derives the package version from the git tag. `pyproject.toml` has no fixed version, so you do not bump or commit anything before a release.
+- `hatch-vcs` derives the package version from the git tag. `pyproject.toml` has no fixed version, so you do not bump the package version before a release. The plugin and registry files have their own versions (see [Release steps](#release-steps)).
 - An untagged local build gets a dev version such as `0.1.4.dev1+g3fa91a0`. A source tree with no git metadata reports `0.0.0`.
 - `glin.__version__` reads the installed package metadata.
 - The workflow ignores tags that do not match `vX.Y.Z`.
 - PyPI rejects an upload of a version number that already exists. To fix a bad release, tag a new version.
+
+### Release steps
+
+The owner does these steps for each release:
+
+1. Set the release version in `server.json` (`version` and `packages[0].version`) and in `plugins/glin/.claude-plugin/plugin.json` (`version`). If the plugin needs the new release, also change the minimum version in `plugins/glin/.mcp.json`. Merge these changes into `main`.
+2. Tag the release and push the tag, for example `git tag v0.1.4` and `git push origin v0.1.4`.
+3. In GitHub Actions, open the `Publish to PyPI` run and approve the `pypi` environment. The upload step starts only after this approval.
+4. Check that the new version is on PyPI.
+5. Publish to the MCP Registry with `mcp-publisher login github` and `mcp-publisher publish`. See [Publishing to the MCP Registry](#publishing-to-the-mcp-registry).
 
 ### One-time setup that makes this the only path
 
@@ -410,7 +423,7 @@ The workflow publishes through PyPI [trusted publishing](https://docs.pypi.org/t
 The registry holds metadata only. It checks that the PyPI package has the line `mcp-name: io.github.AkashChatterjee/glin` in its README. The README has this line as a hidden comment. Publish to PyPI first, then to the registry:
 
 1. Release the new version on PyPI (see above).
-2. In `server.json`, set `version` and `packages[0].version` to the released version.
+2. Check that `version` and `packages[0].version` in `server.json` are the released version.
 3. Run these commands from the repository root:
 
 ```bash
