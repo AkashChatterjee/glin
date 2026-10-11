@@ -4,6 +4,8 @@
 
 - Ensure you always keep the README.md updated with the latest state of the code/library.
 
+- Update CHANGELOG.md only when we plan a release. Do not add entries under `[Unreleased]` for individual changes.
+
 - For any markdown file, report generation or any writeups in the tracked repo or .localdev, follow ASD-STE100 language specifications at 80% strictness.
 
 # Local Testing, Explorations and Planning

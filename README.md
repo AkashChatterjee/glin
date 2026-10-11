@@ -12,7 +12,7 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
 
 **Changelog:** [CHANGELOG.md](https://github.com/AkashChatterjee/glin/blob/main/CHANGELOG.md) lists the changes in each release.
 
-**Case study:** [Child stunting across Indian districts (NFHS-5)](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-child-stunting-nfhs5). A glin model flags districts with high child stunting. Claude calls the model through MCP.
+**Case study:** [The segment of 100,000 sales leads](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-sales-leads-synthetic). Claude with glin put 71% of new leads in the correct segment. Claude alone got 33%. With 1,000 labeled leads in the prompt, Claude got 60% and used 6.7 times more tokens.
 
 ## Contents
 
@@ -309,7 +309,15 @@ Note: a field that you do not mention reaches the model as missing. It does not 
 
 ## Case study
 
-[Child stunting across Indian districts (NFHS-5)](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-child-stunting-nfhs5) uses glin on real public-sector data. A glin model predicts whether a district has high child stunting. Claude calls the model through MCP. The model gives the exact reason for each prediction.
+[The segment of 100,000 sales leads](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-sales-leads-synthetic) uses glin on synthetic CRM data with known rules. Because the rules are known, the study can check each prediction, explanation and what-if against the truth.
+
+- Claude with glin put 71% of new leads in the correct segment. The best possible score on these leads is 68%.
+- Claude alone got 33%. With 1,000 labeled leads in the prompt, Claude got 60% and used 83,000 tokens for each lead. With glin, Claude used approximately 12,500 tokens.
+- glin gave the same answer for the same lead in each new session.
+- The effects that glin learned agree with the true effects (correlation 0.97 to 1.00).
+- One 4-class model and two binary models gave the same accuracy. Two models give a separate explanation for each outcome.
+
+An earlier study, [Child stunting across Indian districts (NFHS-5)](https://akashchatterjee.com/tech/2026/10/11/glin-ml-case-study-child-stunting-nfhs5), uses glin on real public-sector data. A glin model predicts whether a district has high child stunting. The model gives the exact reason for each prediction.
 
 ## Data requirements
 
