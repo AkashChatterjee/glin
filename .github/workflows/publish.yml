@@ -42,6 +42,9 @@ jobs:
           test -f "dist/glin_ml-${VERSION}-py3-none-any.whl"
           test -f "dist/glin_ml-${VERSION}.tar.gz"
 
+      - name: Check server.json and plugin.json carry the tag's version
+        run: .github/scripts/check-versions.sh "$GITHUB_REF_NAME"
+
       - name: Extract the release notes from CHANGELOG.md
         env:
           TAG: ${{ github.ref_name }}
@@ -100,3 +103,55 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file release-notes.md --verify-tag
+
+  mcp-registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # MCP Registry login (GitHub OIDC); no token stored in GitHub
+      contents: read
+    env:
+      # Pinned. Check the SHA-256 in registry_<version>_checksums.txt when you change it.
+      MCP_PUBLISHER_VERSION: v1.8.1
+      MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check server.json and plugin.json carry the tag's version
+        run: .github/scripts/check-versions.sh "$GITHUB_REF_NAME"
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+      - name: Log in to the MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to the MCP Registry
+        run: |
+          # PyPI's CDN can lag after the upload, and the registry then cannot see the version.
+          for attempt in 1 2 3 4 5; do
+            if ./mcp-publisher publish; then exit 0; fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "Publish attempt ${attempt} of 5 failed. Retrying in 60 s."
+              sleep 60
+            fi
+          done
+          echo "::error::mcp-publisher publish failed 5 times."
+          exit 1
+
+      - name: Check the registry lists the version as latest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          curl -fsS "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.AkashChatterjee/glin" \
+            | jq -e --arg v "$VERSION" '
+                any(.servers[];
+                  .server.name == "io.github.AkashChatterjee/glin"
+                  and .server.version == $v
+                  and ._meta["io.modelcontextprotocol.registry/official"].isLatest == true)' \
+            || { echo "::error::The registry does not list ${VERSION} as latest."; exit 1; }
