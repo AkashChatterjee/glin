@@ -1,0 +1,37 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call: # publish.yml runs this before it builds
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+        mcp: ["mcp>=1,<2", "mcp>=2,<3"]
+        include:
+          # Lowest supported mcp; keep in step with pyproject.toml.
+          - python-version: "3.10"
+            mcp: "mcp==1.21.1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # hatch-vcs needs the tags to compute the version
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: pip install -e ".[dev]" "${{ matrix.mcp }}"
+
+      - name: Run tests
+        run: pytest -q
