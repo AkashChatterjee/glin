@@ -28,7 +28,9 @@ def prep_checklist(target_column: str = "") -> str:
    - If the file is on disk, pass csv_path and let the server read the
      file itself (the server runs locally, on the same machine). csv_path
      accepts .csv, .xlsx and .xls files (Excel needs the optional
-     `glin-ml[excel]` install; if train_model says so, tell the user).
+     `glin-ml[excel]` install; if train_model says so, tell the user: pip
+     install 'glin-ml[excel]', or for uvx, uvx --from 'glin-ml[excel]'
+     glin serve).
    - Only pass csv_content (the raw CSV text inline) when there's no file
      to point at, e.g. data pasted into the chat. Never
      inline a large file this way -- reproducing tens of thousands of rows
@@ -45,7 +47,8 @@ def prep_checklist(target_column: str = "") -> str:
      convert them to CSV. Pick the sheet with `sheet` (name or 1-based
      position; required when the workbook has several sheets -- the error
      lists them). The header row is auto-detected, skipping title/banner
-     rows and trailing footnotes. If detection reports an ambiguous
+     rows and trailing footnote rows (`warnings` lists the dropped sheet
+     rows; check them if the sheet's last rows may be data). If detection reports an ambiguous
      header, or the sheet has a multi-row / merged header, look at the
      sheet's first rows and pass `header_rows` using the row numbers as
      Excel shows them (4, "3-4" or [3, 4]); the rows are joined into

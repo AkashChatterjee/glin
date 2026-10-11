@@ -8,7 +8,7 @@ import click
 
 from glin import engine, server
 from glin.engine import DEFAULT_MODELS_ROOT
-from glin.loaders import load_table
+from glin.loaders import CLI_OPTIONS, load_table
 from glin.validation import validate_dataset
 
 
@@ -62,13 +62,15 @@ def train(
     as --name. Excel needs `pip install 'glin-ml[excel]'`."""
     click.echo(f"Loading {csv_path} ...")
     try:
-        table = load_table(csv_path, sheet, header_rows)
+        table = load_table(csv_path, sheet, header_rows, CLI_OPTIONS)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from None
     df = table.df
     if table.sheet is not None:
         rows = ", ".join(str(r) for r in table.header_rows)
         click.echo(f"  sheet {table.sheet!r}, header row(s): {rows}")
+    for message in table.warnings:
+        click.echo(f"  Warning: {message}")
     click.echo(f"  {len(df):,} rows, {len(df.columns)} columns")
 
     click.echo("Validating dataset...")
