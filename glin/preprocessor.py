@@ -51,10 +51,44 @@ _EU_GROUPED_DOTS_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3}){2,}(,\d+)?$")
 _EU_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3})+,\d+$")
 _US_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3})+\.\d+$")
 _US_GROUPED_COMMAS_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3}){2,}$")
+_EU_ONE_DOT_GROUP_RE = re.compile(r"^[-+]?[1-9]\d{0,2}\.\d{3}$")
+_DOT_GROUPS_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3})+$")
 
 _MAX_UNKNOWN_CODE_TOKENS = 5
 _MAX_UNKNOWN_CODE_LENGTH = 8
 _MIN_UNKNOWN_CODE_REPEATS = 2
+
+
+def _is_native_number(value) -> bool:
+    return isinstance(value, (int, float, np.number)) and not isinstance(
+        value, (bool, np.bool_)
+    )
+
+
+def _normalize_separators(text, decimal_comma: bool):
+    """Rewrite ``text`` with a ``.`` decimal mark and no thousands separators.
+
+    A value with both separators uses its last one as the decimal mark, and a
+    repeated separator is a thousands separator. Only a value with one
+    separator uses the column convention. Other shapes, such as ``1.2.3``,
+    stay unparseable.
+    """
+    if not isinstance(text, str):
+        return text
+    commas, dots = text.count(","), text.count(".")
+    if commas and dots:
+        mark = "," if text.rfind(",") > text.rfind(".") else "."
+    elif commas:
+        mark = "," if decimal_comma and commas == 1 else "."
+    elif (dots > 1 and _DOT_GROUPS_RE.match(text)) or (
+        decimal_comma and _EU_ONE_DOT_GROUP_RE.match(text)
+    ):
+        mark = ","
+    else:
+        mark = "."
+    if mark == ",":
+        return text.replace(".", "").replace(",", ".")
+    return text.replace(",", "")
 
 
 class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
@@ -205,7 +239,10 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
 
         self.numeric_ranges_ = {}
         for col in numeric_cols:
-            values = pd.to_numeric(self._strip_numeric(X[col]), errors="coerce").dropna()
+            values = pd.to_numeric(
+                self._strip_numeric(X[col], col in self.decimal_comma_columns_),
+                errors="coerce",
+            ).dropna()
             if len(values):
                 self.numeric_ranges_[col] = (float(values.min()), float(values.max()))
 
@@ -279,7 +316,10 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             if col not in frame.columns:
                 missing.append(col)
                 continue
-            value = pd.to_numeric(self._strip_numeric(frame[col]), errors="coerce").iloc[0]
+            decimal_comma = col in getattr(self, "decimal_comma_columns_", [])
+            value = pd.to_numeric(
+                self._strip_numeric(frame[col], decimal_comma), errors="coerce"
+            ).iloc[0]
             if pd.isna(value):
                 missing.append(col)
                 continue
@@ -438,14 +478,16 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         """
         if pd.api.types.is_numeric_dtype(series):
             return False
-        cleaned = self._strip_symbols(series.dropna())
+        cleaned = self._strip_symbols(series[~series.map(_is_native_number)].dropna())
         eu = cleaned.str.match(_EU_BOTH_RE) | cleaned.str.match(_EU_GROUPED_DOTS_RE)
         eu |= cleaned.str.match(_EU_ONLY_COMMA_RE)
         us = cleaned.str.match(_US_BOTH_RE) | cleaned.str.match(_US_GROUPED_COMMAS_RE)
         if eu.any() and us.any():
             self.warnings_.append(
                 f"column '{col}' mixes US (1,234.56) and European (1.234,56) number "
-                "formats; parsing as US, so European-style values may become missing"
+                "formats; glin reads a value with both separators by its last separator "
+                "and reads every other comma as a thousands separator, so a European "
+                "value such as '12,5' becomes 125"
             )
             return False
         return bool(eu.any())
@@ -506,16 +548,13 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
     def _strip_numeric(self, series: pd.Series, decimal_comma: bool = False) -> pd.Series:
         if pd.api.types.is_numeric_dtype(series):
             return series
+        native = series.map(_is_native_number)
         cleaned = self._strip_symbols(series)
         cleaned = cleaned.mask(cleaned.str.lower().isin(self._code_set()))
         cleaned = cleaned.str.replace(_PAREN_NEG_RE, r"-\1", regex=True)
-        if decimal_comma:
-            cleaned = cleaned.str.replace(".", "", regex=False).str.replace(
-                ",", ".", regex=False
-            )
-        else:
-            cleaned = cleaned.str.replace(",", "", regex=False)
-        return cleaned.replace({"": np.nan, "nan": np.nan, "None": np.nan})
+        cleaned = cleaned.map(lambda text: _normalize_separators(text, decimal_comma))
+        cleaned = cleaned.replace({"": np.nan, "nan": np.nan, "None": np.nan})
+        return cleaned.mask(native, series)
 
     def _clean_categorical(self, series: pd.Series) -> pd.Series:
         cleaned = series.astype(str).str.strip().str.lower()

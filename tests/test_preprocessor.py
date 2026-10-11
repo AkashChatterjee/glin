@@ -217,6 +217,61 @@ def test_mixed_conventions_warn_and_fall_back_to_us():
     assert any("mixes" in w for w in pre.warnings_)
 
 
+def test_mixed_conventions_parse_values_with_both_separators():
+    pre = _fit(_col(["1,234.56", "1.234,56", "12,5", "6", "7"]))
+    warning = next(w for w in pre.warnings_ if "mixes" in w)
+    assert "becomes 125" in warning and "missing" not in warning
+    out = pre.transform(pd.DataFrame({"x": ["1,234.56", "1.234,56", "12,5"]}))["x"].tolist()
+    assert out == pytest.approx([1234.56, 1234.56, 125.0])
+
+
+def test_decimal_comma_range_and_check_inputs_use_feature_units():
+    pre = _fit(pd.DataFrame({"c": ["12,5", "3,25", "100,1", "7,0", "8,9"]}))
+    assert pre.numeric_ranges_["c"] == pytest.approx((3.25, 100.1))
+    assert pre.check_inputs({"c": "5,0"})["warnings"] == []
+    warnings = pre.check_inputs({"c": "500,0"})["warnings"]
+    assert [w["issue"] for w in warnings] == ["out_of_range"]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("1.500,50", 1500.5),
+        ("980,50", 980.5),
+        ("1.500", 1500.0),
+        ("1500.5", 1500.5),
+        ("1,500.50", 1500.5),
+        ("1,500,000", 1500000.0),
+        ("0.125", 0.125),
+        (1500.5, 1500.5),
+        (12, 12.0),
+    ],
+)
+def test_decimal_comma_column_predict_inputs(value, expected):
+    pre = _fit(
+        pd.DataFrame({"c": ["1.234,56", "2.500,00", "3.100,10", "980,50", "4.000,00"]})
+    )
+    assert pre.decimal_comma_columns_ == ["c"]
+    assert pre.transform({"c": value})["c"].iloc[0] == pytest.approx(expected)
+
+
+def test_decimal_comma_object_batch_keeps_native_numbers():
+    pre = _fit(
+        pd.DataFrame({"c": ["1.234,56", "2.500,00", "3.100,10", "980,50", "4.000,00"]})
+    )
+    batch = pd.DataFrame({"c": pd.Series([1500.5, "1.000,0", 12], dtype=object)})
+    assert pre.transform(batch)["c"].tolist() == pytest.approx([1500.5, 1000.0, 12.0])
+
+
+def test_mixed_object_column_at_training():
+    values = pd.Series([1234.5, "1.234,56", 7.25] * 4, dtype=object)
+    pre = _fit(pd.DataFrame({"c": values}))
+    assert pre.decimal_comma_columns_ == ["c"]
+    out = pre.transform(pd.DataFrame({"c": values}))["c"].tolist()[:3]
+    assert out == pytest.approx([1234.5, 1234.56, 7.25])
+    assert pre.numeric_ranges_["c"] == pytest.approx((7.25, 1234.56))
+
+
 @pytest.mark.parametrize(
     "values,expected",
     [
