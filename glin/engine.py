@@ -14,6 +14,7 @@ contract.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import warnings
@@ -39,6 +40,16 @@ from glin.validation import MIN_ROWS, validate_dataset
 BUNDLE_FILENAME = "bundle.joblib"
 METADATA_FILENAME = "metadata.json"
 DEFAULT_MODELS_ROOT = Path.home() / ".glin" / "models"
+
+MODEL_NAME_RULE = (
+    "a model name must be 1-64 characters of letters, digits, '-', '_' or '.', "
+    "and must not start with '.'"
+)
+EXISTING_MODEL_NAME_RULE = (
+    "a model name must be a single folder name inside the models folder, "
+    "with no '/' or '\\', and must not be empty, '.' or '..'"
+)
+_MODEL_NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}")
 
 # The holdout split is seeded independently of the model's random_state so
 # two trials that differ only in hyperparameters (or only in random_state)
@@ -349,8 +360,39 @@ def train_model(
     }
 
 
+def validate_model_name(model_name: Any) -> str:
+    if not isinstance(model_name, str) or not _MODEL_NAME_RE.fullmatch(model_name):
+        raise ValueError(f"invalid model name {model_name!r}: {MODEL_NAME_RULE}")
+    return model_name
+
+
+def model_dir_for(models_root: Path, model_name: Any, *, existing: bool = False) -> Path:
+    """Directory for model_name, always a direct child of models_root.
+
+    New models must obey MODEL_NAME_RULE. With existing=True (load, delete)
+    any single path component is accepted, so models saved under older,
+    looser names stay usable."""
+    if existing:
+        if (
+            not isinstance(model_name, str)
+            or model_name in ("", ".", "..")
+            or any(c in model_name for c in "/\\\0")
+            or Path(model_name).is_absolute()
+            or Path(model_name).drive
+        ):
+            raise ValueError(f"invalid model name {model_name!r}: {EXISTING_MODEL_NAME_RULE}")
+        rule = EXISTING_MODEL_NAME_RULE
+    else:
+        validate_model_name(model_name)
+        rule = MODEL_NAME_RULE
+    model_dir = Path(models_root) / model_name
+    if model_dir.resolve().parent != Path(models_root).resolve():
+        raise ValueError(f"invalid model name {model_name!r}: {rule}")
+    return model_dir
+
+
 def save_bundle(bundle: dict[str, Any], models_root: Path) -> Path:
-    model_dir = Path(models_root) / bundle["model_name"]
+    model_dir = model_dir_for(models_root, bundle["model_name"])
     model_dir.mkdir(parents=True, exist_ok=True)
 
     # train_model()'s on_progress= wires a closure into the fitted model's

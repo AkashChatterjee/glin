@@ -160,7 +160,7 @@ def build_server(
         return register
 
     def _model_dir(model_name: str) -> Path:
-        model_dir = models_root / model_name
+        model_dir = engine.model_dir_for(models_root, model_name, existing=True)
         if not (model_dir / engine.METADATA_FILENAME).exists():
             raise ValueError(f"model '{model_name}' not found in {models_root}")
         return model_dir
@@ -329,7 +329,7 @@ def build_server(
         if (csv_path is None) == (csv_content is None):
             raise ValueError("pass exactly one of csv_path or csv_content")
 
-        model_dir = models_root / model_name
+        model_dir = engine.model_dir_for(models_root, model_name)
         if model_dir.exists() and not overwrite:
             raise ValueError(
                 f"model '{model_name}' already exists at {model_dir} -- pass "

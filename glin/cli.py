@@ -60,6 +60,10 @@ def train(
 ) -> None:
     """Train an EBM classifier on CSV_PATH (.csv, .xlsx or .xls) and save it
     as --name. Excel needs `pip install 'glin-ml[excel]'`."""
+    try:
+        engine.model_dir_for(DEFAULT_MODELS_ROOT, name)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
     click.echo(f"Loading {csv_path} ...")
     try:
         table = load_table(csv_path, sheet, header_rows, CLI_OPTIONS)
@@ -175,7 +179,10 @@ def list_cmd() -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 def delete(name: str, yes: bool) -> None:
     """Delete a trained model."""
-    model_dir = DEFAULT_MODELS_ROOT / name
+    try:
+        model_dir = engine.model_dir_for(DEFAULT_MODELS_ROOT, name, existing=True)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
     if not model_dir.exists():
         click.echo(f"Error: model '{name}' not found in {DEFAULT_MODELS_ROOT}")
         raise SystemExit(1)
