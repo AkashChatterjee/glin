@@ -84,7 +84,9 @@ cd glin
 pip install -e ".[dev]"      # also installs the Excel libraries, and xlwt to build .xls test files
 ```
 
-glin works with the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1,<3`). The test suite runs against each line. To test one line, add a constraint. For example: `pip install -e ".[dev]" "mcp>=2,<3"`.
+glin works with the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1.21.1,<3`). Versions before 1.21.1 do not work. mcp 1.21.0 and earlier fail on import with pydantic 2.14 and later. The earliest 1.x versions also do not have the API that glin uses. To test one line, add a constraint. For example: `pip install -e ".[dev]" "mcp>=2,<3"`.
+
+The `Tests` GitHub Actions workflow ([.github/workflows/test.yml](.github/workflows/test.yml)) runs the test suite on each pull request and on each push to `main`. It runs on Python 3.10 and 3.12 with the latest mcp 1.x and the latest mcp 2.x. It also runs on Python 3.10 with the lowest supported mcp (`mcp==1.21.1`).
 
 ## Train a model
 
@@ -342,7 +344,7 @@ git tag v0.1.3
 git push origin v0.1.3
 ```
 
-The workflow runs the tests on Python 3.10 and 3.12. It builds the sdist and the wheel, and checks that both carry the version of the tag. Then it publishes them to PyPI as `glin-ml` at that exact version.
+The workflow runs the `Tests` workflow first (the same matrix as for pull requests). If a test fails, the workflow stops and does not publish. Then it builds the sdist and the wheel, and checks that both carry the version of the tag. Then it publishes them to PyPI as `glin-ml` at that exact version.
 
 - `hatch-vcs` derives the package version from the git tag. `pyproject.toml` has no fixed version, so you do not bump or commit anything before a release.
 - An untagged local build gets a dev version such as `0.1.4.dev1+g3fa91a0`. A source tree with no git metadata reports `0.0.0`.
