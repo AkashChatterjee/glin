@@ -19,6 +19,7 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
   - [MCP Registry](#mcp-registry)
   - [Install for development](#install-for-development)
 - [Train a model](#train-a-model)
+  - [Model names](#model-names)
   - [List and delete models](#list-and-delete-models)
   - [Excel input](#excel-input-xlsx--xls)
 - [Use glin with an MCP client](#use-glin-with-an-mcp-client)
@@ -96,6 +97,19 @@ glin train path/to/data.csv --target churn --name churn_v1
 ```
 
 glin saves each model in `~/.glin/models/<name>/`.
+
+### Model names
+
+When you make a model (`glin train --name`, or `model_name` in `train_model`), the name must obey this rule:
+
+- Use 1 to 64 characters.
+- Use only letters, digits, `-`, `_` and `.`.
+- Do not start the name with `.`. Thus `.`, `..` and hidden names are not valid.
+- Do not use `/` or `\`. Thus a path or an absolute path is not valid.
+
+When you use or delete a model (`inspect_model`, `predict`, `explain_model`, `glin delete`), the name must be one folder name in the models folder. It must not contain `/` or `\`, and it must not be empty, `.` or `..`. Thus you can still use models that an earlier glin version saved with other names, for example a name with a space.
+
+glin rejects a name that does not obey the applicable rule. The error message gives the rule. glin also makes sure that the model folder is directly in the models folder, also when a symbolic link is in the path. Thus a model name cannot write, read or delete files outside the models folder.
 
 ### List and delete models
 
