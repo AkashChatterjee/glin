@@ -122,7 +122,7 @@ def build_server(
         toward it, negative toward the other class); multiclass reports
         per-class scores and a per-class `base_logit`. `warnings` names inputs the model never
         saw (unseen categories, numerics or dates outside the training range,
-        unparseable dates); treat the prediction as less reliable when present.
+        unparseable numbers or dates); treat the prediction as less reliable when present.
         `missing_features` lists absent inputs, which are valid but worth
         mentioning. Pass a date column as its raw value (e.g. "2024-03-06");
         glin derives the `<col>__<part>` terms shown in `contributions` itself."""
@@ -239,7 +239,7 @@ def build_server(
 
         `suppression_codes` lists the tokens treated as missing in otherwise
         numeric columns (case-insensitive, whitespace ignored); omit it for
-        the default ["SUPP", "NE", "NP", "z"]. Passing a list replaces the
+        the default ["SUPP", "NE", "NP", "z", "*", ".."]. Passing a list replaces the
         default. If the result's `warnings` say a numeric column has repeated
         non-numeric values that look like missing-value codes, confirm with
         the user and pass them here.

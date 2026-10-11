@@ -18,6 +18,7 @@ See tests/test_preprocessor.py for the per-column-type cases.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Sequence
 
@@ -38,14 +39,25 @@ from glin.dates import (
 CONTINUOUS = "continuous"
 NOMINAL = "nominal"
 
-DEFAULT_SUPPRESSION_CODES = ("SUPP", "NE", "NP", "z")
+DEFAULT_SUPPRESSION_CODES = ("SUPP", "NE", "NP", "z", "*", "..")
 
 KEEP_HINT = (
     "If it is a real measurement, round or bin it so values repeat and it is kept."
 )
 
+_CURRENCY_CODES = (
+    "USD|EUR|GBP|JPY|CNY|RMB|INR|PKR|LKR|NPR|BDT|AUD|CAD|NZD|SGD|HKD|CHF|SEK|NOK|"
+    "DKK|ZAR|BRL|MXN|KRW|RUB|TRY|PLN|ILS|THB|AED|SAR"
+)
 _SYMBOL_RE = re.compile(r"[$€£¥₹₩₽₺₪฿\s\u00a0]|%(?=\)?\s*$)")
+# Applied after _SYMBOL_RE, so spaces are already gone: "USD 100" is "USD100".
+_CURRENCY_CODE_RE = re.compile(
+    rf"(?i)^([-+(]?)(?:{_CURRENCY_CODES}|rs\.?)(?=[-+(.,\d])"
+    rf"|(?<=[\d.])(?:{_CURRENCY_CODES})(?=\)?$)"
+)
+_LETTER_RE = re.compile(r"[A-Za-z]")
 _PAREN_NEG_RE = re.compile(r"^\((.*)\)$")
+_TRAILING_NEG_RE = re.compile(r"^(\d[\d.,]*)-$")
 _EU_ONLY_COMMA_RE = re.compile(r"^[-+]?\d*,\d{1,2}$|^[-+]?\d*,\d{4,}$")
 _EU_GROUPED_DOTS_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3}){2,}(,\d+)?$")
 _EU_BOTH_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3})+,\d+$")
@@ -57,12 +69,39 @@ _DOT_GROUPS_RE = re.compile(r"^[-+]?\d{1,3}(\.\d{3})+$")
 _MAX_UNKNOWN_CODE_TOKENS = 5
 _MAX_UNKNOWN_CODE_LENGTH = 8
 _MIN_UNKNOWN_CODE_REPEATS = 2
+_MIN_NUMERIC_SHARE_FOR_CODE_HINT = 0.5
 
 
 def _is_native_number(value) -> bool:
     return isinstance(value, (int, float, np.number)) and not isinstance(
         value, (bool, np.bool_)
     )
+
+
+def _json_safe(value):
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _finite(values: pd.Series) -> pd.Series:
+    infinite = values.isin([np.inf, -np.inf])
+    return values.mask(infinite) if infinite.any() else values
+
+
+def _normalize_number(text, decimal_comma: bool):
+    """Move a ``(1,234)`` or ``1234-`` sign to the front, then normalize separators."""
+    if not isinstance(text, str):
+        return text
+    if text.startswith("(") or text.endswith("-"):
+        negative = _PAREN_NEG_RE.match(text) or _TRAILING_NEG_RE.match(text)
+        if negative:
+            text = "-" + negative.group(1)
+    return _normalize_separators(text, decimal_comma)
 
 
 def _normalize_separators(text, decimal_comma: bool):
@@ -205,6 +244,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                 # continuous values however many distinct values they take.
                 numeric_cols.append(col)
                 continue
+            self._warn_on_codes_blocking_numeric(col, series, decimal_comma)
 
             if is_id_like:
                 self._drop(
@@ -242,7 +282,14 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             values = pd.to_numeric(
                 self._strip_numeric(X[col], col in self.decimal_comma_columns_),
                 errors="coerce",
-            ).dropna()
+            )
+            n_infinite = int(values.isin([np.inf, -np.inf]).sum())
+            if n_infinite:
+                self.warnings_.append(
+                    f"column '{col}' has {n_infinite} infinite value(s); they are "
+                    "treated as missing"
+                )
+            values = _finite(values).dropna()
             if len(values):
                 self.numeric_ranges_[col] = (float(values.min()), float(values.max()))
 
@@ -278,9 +325,11 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
 
         for col in self.numeric_columns_:
             if col in X.columns:
-                out[col] = pd.to_numeric(
-                    self._strip_numeric(X[col], col in self.decimal_comma_columns_),
-                    errors="coerce",
+                out[col] = _finite(
+                    pd.to_numeric(
+                        self._strip_numeric(X[col], col in self.decimal_comma_columns_),
+                        errors="coerce",
+                    )
                 )
             else:
                 out[col] = np.nan
@@ -303,9 +352,10 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
     def check_inputs(self, record: dict) -> dict[str, list]:
         """Flag a single inference record's inputs the model has not seen.
 
-        ``warnings`` lists unseen categories and numerics outside the training
-        range; ``missing_features`` lists absent/blank inputs, which are valid
-        (the model bins them) and so reported separately.
+        ``warnings`` lists unseen categories, numerics outside the training
+        range and inputs that do not parse; ``missing_features`` lists
+        absent/blank inputs, which are valid (the model bins them) and so
+        reported separately.
         """
         check_is_fitted(self, "output_columns_")
         warnings: list[dict] = []
@@ -320,8 +370,12 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             value = pd.to_numeric(
                 self._strip_numeric(frame[col], decimal_comma), errors="coerce"
             ).iloc[0]
-            if pd.isna(value):
+            if pd.isna(value) or np.isinf(value):
                 missing.append(col)
+                if not self._is_missing_marker(frame[col]):
+                    warnings.append(
+                        {"feature": col, "value": record[col], "issue": "unparseable_number"}
+                    )
                 continue
             low, high = getattr(self, "numeric_ranges_", {}).get(col, (-np.inf, np.inf))
             if value < low or value > high:
@@ -349,6 +403,8 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         for col in getattr(self, "date_columns_", []):
             self._check_date_input(col, record, frame, warnings, missing)
 
+        for warning in warnings:
+            warning["value"] = _json_safe(warning["value"])
         return {"warnings": warnings, "missing_features": missing}
 
     def _check_date_input(
@@ -384,6 +440,9 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
 
     def _is_blank(self, value) -> bool:
         return bool(pd.isna(value)) or str(value).strip().lower() in ("", "nan", "none")
+
+    def _is_missing_marker(self, series: pd.Series) -> bool:
+        return self._is_blank(series.iloc[0]) or bool(self._is_suppression_code(series).iloc[0])
 
     def get_feature_types(self) -> list[str]:
         """Ordered feature_types list matching output_columns_, for EBM's
@@ -503,6 +562,29 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         )
         return coerced.notna().mean() >= self.numeric_coerce_threshold
 
+    def _code_like_leftovers(
+        self, series: pd.Series, decimal_comma: bool
+    ) -> tuple[pd.Series, float] | None:
+        """Counts of the unparseable values and the share of values that parse,
+        or None unless the unparseable values are few, short and repeated."""
+        non_null = series.dropna()
+        stripped = self._strip_numeric(non_null, decimal_comma)
+        parsed = pd.to_numeric(stripped, errors="coerce").notna()
+        counts = non_null[~parsed & stripped.notna()].astype(str).str.strip().value_counts()
+        if counts.empty or len(counts) > _MAX_UNKNOWN_CODE_TOKENS:
+            return None
+        if any(
+            len(token) > _MAX_UNKNOWN_CODE_LENGTH or n < _MIN_UNKNOWN_CODE_REPEATS
+            for token, n in counts.items()
+        ):
+            return None
+        n_parsed = int(parsed.sum())
+        return counts, n_parsed / (n_parsed + int(counts.sum()))
+
+    def _code_hint(self, counts: pd.Series) -> tuple[str, list[str]]:
+        tokens = ", ".join(f"'{t}' x{n}" for t, n in counts.items())
+        return tokens, [*self._known_codes(), *counts.index]
+
     def _warn_on_unrecognized_codes(
         self, col: str, series: pd.Series, decimal_comma: bool
     ) -> None:
@@ -511,24 +593,33 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         They become missing either way; the warning lets the caller confirm
         that, or add them to ``suppression_codes`` explicitly.
         """
-        non_null = series.dropna()
-        stripped = self._strip_numeric(non_null, decimal_comma)
-        unparsed = non_null[pd.to_numeric(stripped, errors="coerce").isna() & stripped.notna()]
-        counts = unparsed.astype(str).str.strip().value_counts()
-        if counts.empty or len(counts) > _MAX_UNKNOWN_CODE_TOKENS:
+        leftovers = self._code_like_leftovers(series, decimal_comma)
+        if leftovers is None:
             return
-        if any(
-            len(token) > _MAX_UNKNOWN_CODE_LENGTH or n < _MIN_UNKNOWN_CODE_REPEATS
-            for token, n in counts.items()
-        ):
-            return
-        tokens = ", ".join(f"'{t}' x{n}" for t, n in counts.items())
-        confirmed = [*self._known_codes(), *counts.index]
+        tokens, confirmed = self._code_hint(leftovers[0])
         self.warnings_.append(
             f"column '{col}' is numeric but has repeated non-numeric values ({tokens}) "
             "that look like missing-value codes; they are treated as missing. If that "
             f"is right, retrain with suppression_codes={confirmed} to confirm; if they "
             "carry meaning, recode them before training"
+        )
+
+    def _warn_on_codes_blocking_numeric(
+        self, col: str, series: pd.Series, decimal_comma: bool
+    ) -> None:
+        """Flag a mostly-numeric column that code-like values keep from being numeric."""
+        if pd.api.types.is_numeric_dtype(series):
+            return
+        leftovers = self._code_like_leftovers(series, decimal_comma)
+        if leftovers is None or leftovers[1] < _MIN_NUMERIC_SHARE_FOR_CODE_HINT:
+            return
+        tokens, confirmed = self._code_hint(leftovers[0])
+        self.warnings_.append(
+            f"column '{col}' is {leftovers[1]:.0%} numbers, below the "
+            f"{self.numeric_coerce_threshold:.0%} numeric threshold, because of repeated "
+            f"non-numeric values ({tokens}) that look like missing-value codes; it is "
+            "not used as a numeric column. If they are codes, retrain with "
+            f"suppression_codes={confirmed} to read it as numbers"
         )
 
     def _known_codes(self) -> list[str]:
@@ -543,7 +634,14 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
 
     @staticmethod
     def _strip_symbols(series: pd.Series) -> pd.Series:
-        return series.astype(str).str.replace(_SYMBOL_RE, "", regex=True)
+        cleaned = series.astype(str).str.replace(_SYMBOL_RE, "", regex=True)
+        cleaned = cleaned.str.replace("\u2212", "-", regex=False)
+        has_letter = cleaned.str.contains(_LETTER_RE).to_numpy(dtype=bool)
+        if has_letter.any():
+            cleaned.iloc[np.flatnonzero(has_letter)] = (
+                cleaned[has_letter].str.replace(_CURRENCY_CODE_RE, r"\1", regex=True).to_numpy()
+            )
+        return cleaned
 
     def _strip_numeric(self, series: pd.Series, decimal_comma: bool = False) -> pd.Series:
         if pd.api.types.is_numeric_dtype(series):
@@ -551,8 +649,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         native = series.map(_is_native_number)
         cleaned = self._strip_symbols(series)
         cleaned = cleaned.mask(cleaned.str.lower().isin(self._code_set()))
-        cleaned = cleaned.str.replace(_PAREN_NEG_RE, r"-\1", regex=True)
-        cleaned = cleaned.map(lambda text: _normalize_separators(text, decimal_comma))
+        cleaned = cleaned.map(lambda text: _normalize_number(text, decimal_comma))
         cleaned = cleaned.replace({"": np.nan, "nan": np.nan, "None": np.nan})
         return cleaned.mask(native, series)
 
