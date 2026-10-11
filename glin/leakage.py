@@ -8,13 +8,14 @@ so coerced numerics (``44.98%``, ``$1,234``) and derived date terms
 
 Each feature gets a single-feature stump: a decision tree with at most
 ``n_classes + 1`` leaves for numerics (thresholds or a band), or a
-category -> majority-class map for categoricals. It is scored by balanced
-accuracy and flagged at ``LEAKAGE_THRESHOLD``. Chance and memorisation are
-guarded against by:
+category -> majority-class map for categoricals and for numerics with at most
+``MAX_CODE_VALUES`` distinct values (integer-coded categories). It is scored by
+balanced accuracy and flagged at ``LEAKAGE_THRESHOLD``. Chance and
+memorisation are guarded against by:
 
 * a minimum leaf / category support, so one-row "categories" can't separate;
-* categoricals must have >= ``MIN_COVERAGE`` of rows in well-supported
-  categories, so a near-unique column scores nothing;
+* categoricals must have >= ``MIN_COVERAGE`` of rows in categories with at
+  least ``MIN_LEAF_FLOOR`` rows, so a near-unique column scores nothing;
 * classes with fewer than ``MIN_CLASS_ROWS`` rows are left out of the check,
   and it is skipped below ``MIN_CHECK_ROWS`` rows.
 
@@ -33,6 +34,7 @@ MIN_CHECK_ROWS = 30
 MIN_CLASS_ROWS = 10
 MIN_LEAF_FLOOR = 5
 MIN_COVERAGE = 0.90
+MAX_CODE_VALUES = 20
 MAX_CHECK_ROWS = 20_000
 MAX_REPORTED = 10
 MAX_MAPPING_ITEMS = 6
@@ -97,14 +99,13 @@ def _numeric_stump(
 
 
 def _categorical_map(
-    values: pd.Series, y: np.ndarray, min_leaf: int, class_names: Sequence[Any]
+    codes: np.ndarray, categories: Sequence[str], y: np.ndarray, class_names: Sequence[Any]
 ) -> tuple[float, str] | None:
-    codes, categories = pd.factorize(values.astype(str))
     n_classes = len(class_names)
     counts = np.zeros((len(categories), n_classes))
     np.add.at(counts, (codes, y), 1)
 
-    supported = counts.sum(axis=1) >= min_leaf
+    supported = counts.sum(axis=1) >= MIN_LEAF_FLOOR
     keep = supported[codes]
     if keep.mean() < MIN_COVERAGE or len(np.unique(y[keep])) < 2:
         return None
@@ -122,6 +123,18 @@ def _categorical_map(
         more = f", ... ({len(members)} total)" if len(members) > MAX_MAPPING_ITEMS else ""
         parts.append(f"{{{shown}{more}}} -> {class_names[int(k)]!r}")
     return score, "; ".join(parts)
+
+
+def _numeric_codes(values: np.ndarray) -> tuple[np.ndarray, list[str]] | None:
+    """Codes for a numeric column with few distinct values (likely category
+    codes), with missing as its own category; None for a continuous column."""
+    limit = MAX_CODE_VALUES + 1  # + missing
+    if len(np.unique(values[:1000])) > limit:
+        return None
+    codes, uniques = pd.factorize(values, sort=True, use_na_sentinel=False)
+    if len(uniques) > MAX_CODE_VALUES + int(np.isnan(uniques).any()):
+        return None
+    return codes, ["missing" if np.isnan(u) else _fmt(u) for u in uniques]
 
 
 def find_leaky_features(
@@ -163,11 +176,13 @@ def find_leaky_features(
     found: dict[str, dict[str, Any]] = {}
     for feature in X_sub.columns:
         if feature in categorical:
-            result = _categorical_map(X_sub[feature], y_sub, min_leaf, names)
+            result = _categorical_map(*pd.factorize(X_sub[feature].astype(str)), y_sub, names)
         else:
-            result = _numeric_stump(
-                pd.to_numeric(X_sub[feature], errors="coerce").to_numpy(float), y_sub, min_leaf, names
-            )
+            values = pd.to_numeric(X_sub[feature], errors="coerce").to_numpy(float)
+            result = _numeric_stump(values, y_sub, min_leaf, names)
+            coded = _numeric_codes(values) if result is None else None
+            if coded is not None:
+                result = _categorical_map(*coded, y_sub, names)
         if result is None:
             continue
         score, rule = result
