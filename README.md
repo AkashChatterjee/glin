@@ -317,6 +317,8 @@ Note: a field that you do not mention reaches the model as missing. It does not 
 
 The rules are in `glin/validation.py` as a flat list. To support a new data shape, add one rule and one preprocessing case. The rest of the pipeline does not change.
 
+In the Python API, a DataFrame can have column names that are not text, for example `0` and `1`. glin changes them to text (`"0"`, `"1"`), and the results use these names. `predict` accepts either form as a key. Two names that are the same as text, such as `0` and `"0"`, give an error.
+
 ### Feature columns: supported today
 
 | Data shape | What happens |

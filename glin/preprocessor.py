@@ -84,6 +84,19 @@ _MIN_UNKNOWN_CODE_REPEATS = 2
 _MIN_NUMERIC_SHARE_FOR_CODE_HINT = 0.5
 
 
+def _with_str_columns(X: pd.DataFrame) -> pd.DataFrame:
+    """Derived names such as ``<col>__year`` need string column names."""
+    if all(isinstance(c, str) for c in X.columns):
+        return X
+    names = [str(c) for c in X.columns]
+    if len(set(names)) < len(names):
+        raise ValueError(
+            "column names must stay unique as text; "
+            f"{sorted({n for n in names if names.count(n) > 1})} repeat"
+        )
+    return X.set_axis(names, axis=1)
+
+
 def _is_native_number(value) -> bool:
     return isinstance(value, (int, float, np.number)) and not isinstance(
         value, (bool, np.bool_)
@@ -192,7 +205,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         self.date_parse_threshold = date_parse_threshold
 
     def fit(self, X: pd.DataFrame, y=None) -> "EBMTabularPreprocessor":
-        X = pd.DataFrame(X)
+        X = _with_str_columns(pd.DataFrame(X))
         n_rows = len(X)
 
         dropped: list[str] = []
@@ -359,6 +372,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
             X = pd.DataFrame([X])
         else:
             X = pd.DataFrame(X)
+        X = _with_str_columns(X)
 
         out: dict[str, pd.Series] = {}
 
@@ -402,7 +416,8 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         check_is_fitted(self, "output_columns_")
         warnings: list[dict] = []
         missing: list[str] = []
-        frame = pd.DataFrame([record])
+        frame = _with_str_columns(pd.DataFrame([record]))
+        record = dict(zip(frame.columns, record.values()))
 
         for col in self.numeric_columns_:
             if col not in frame.columns:
