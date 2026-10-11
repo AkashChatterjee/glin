@@ -74,8 +74,9 @@ def prep_checklist(target_column: str = "") -> str:
      order: predicting a neighbouring level is as wrong as a far-off one.
      Consider collapsing it to fewer bands or a binary threshold (e.g.
      "high risk" vs not), and tell the user the order is not modelled.
-   - A numeric target stored as text (e.g. "85%") would make glin treat
-     each distinct value as its own class -- convert and bin it first.
+   - A numeric target stored as text (e.g. "85%") gets the same checks
+     (train_model warns), but glin still treats each distinct value as its
+     own class -- convert and bin it first.
      When binning, make sure the bins cover the whole range -- gaps
      silently drop rows.
 

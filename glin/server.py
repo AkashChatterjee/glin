@@ -118,8 +118,8 @@ def build_server(
         (sorted by magnitude), and an additivity check verifying the scores sum
         to the model's own predicted probabilities (`reconstructed_probability`
         vs `model_probability`, both keyed by class name). For binary targets
-        scores and `base_logit` are log-odds of `score_class` (positive pushes
-        toward it, negative toward the other class); multiclass reports
+        scores and `base_logit` are log-odds of `score_class` (`target_classes[1]`;
+        positive pushes toward it, negative toward the other class); multiclass reports
         per-class scores and a per-class `base_logit`. `warnings` names inputs the model never
         saw (unseen categories, numerics or dates outside the training range,
         unparseable numbers or dates); treat the prediction as less reliable when present.

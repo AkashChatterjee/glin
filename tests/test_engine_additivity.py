@@ -319,3 +319,36 @@ def test_wide_frame_trains_and_predicts_without_pandas_warnings():
             df, "label", model_name="wide_test", hyperparameters={"interactions": 0, "outer_bags": 2}
         )
         engine.predict_record(bundle, record)
+
+
+@pytest.mark.parametrize("labels", [(0, 1), (2, 10), (False, True)])
+def test_score_class_has_the_type_of_predicted_class(labels):
+    df = _synthetic_binary_df()
+    df["label"] = np.where(df["label"] == "positive", labels[1], labels[0])
+    bundle = engine.train_model(df, "label", model_name="typed_labels", hyperparameters={"interactions": 0})
+    explanation = engine.explain_record(bundle, df.drop(columns=["label"]).iloc[0].to_dict())
+
+    assert explanation["score_class"] == bundle["target_classes"][1] == labels[1]
+    assert type(explanation["score_class"]) is type(explanation["predicted_class"])
+    assert str(explanation["score_class"]) in explanation["model_probability"]
+
+
+@pytest.mark.parametrize(
+    "value, text",
+    [(21140.37, "21140"), (30.6123, "30.61"), (0.00001234, "0.00001234"), (-0.5, "-0.5"), (12345678.9, "1.235e+07")],
+)
+def test_shape_edges_avoid_exponent_notation_below_1e7(value, text):
+    assert engine._edge(value) == text
+
+
+def test_continuous_shape_range_for_large_values_has_no_exponent():
+    rng = np.random.RandomState(2)
+    n = 500
+    df = pd.DataFrame({"income": np.round(rng.uniform(20000, 250000, n), -1)})
+    df["label"] = np.where(df["income"] + rng.normal(scale=30000, size=n) > 130000, "high", "low")
+    bundle = engine.train_model(
+        df, "label", model_name="shape_large", hyperparameters={"interactions": 0, "outer_bags": 2}
+    )
+    shape = engine.global_importance(bundle)["terms"][0]["shape"]
+    for key in ("highest", "lowest"):
+        assert "e" not in shape[key]["range"]
