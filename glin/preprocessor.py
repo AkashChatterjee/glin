@@ -33,6 +33,8 @@ from glin.dates import (
     derive_parts,
     derived_name,
     detect_dayfirst,
+    numeric_order,
+    order_issue,
     parse_dates,
 )
 
@@ -184,6 +186,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         categorical_cols: list[str] = []
         self.date_columns_: list[str] = []
         self.date_dayfirst_: dict[str, bool] = {}
+        self.date_orders_: dict[str, str | None] = {}
         self.date_references_: dict[str, pd.Timestamp] = {}
         self.date_ranges_: dict[str, tuple[pd.Timestamp, pd.Timestamp]] = {}
         self.date_feature_names_: dict[str, list[str]] = {}
@@ -424,6 +427,17 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
                     {"feature": col, "value": record[col], "issue": "unparseable_date"}
                 )
             return
+        orders = getattr(self, "date_orders_", {})
+        issue = order_issue(frame[col].iloc[0], orders[col]) if col in orders else None
+        if issue:
+            warnings.append(
+                {
+                    "feature": col,
+                    "value": record[col],
+                    "issue": issue,
+                    "parsed_as": date.date().isoformat(),
+                }
+            )
         low, high = self.date_ranges_[col]
         if date.normalize() < low or date.normalize() > high:
             warnings.append(
@@ -509,6 +523,7 @@ class EBMTabularPreprocessor(BaseEstimator, TransformerMixin):
         if not names:
             return False
         self.date_dayfirst_[col] = dayfirst
+        self.date_orders_[col] = numeric_order(series, dayfirst)
         self.date_references_[col] = reference
         self.date_ranges_[col] = (reference, valid.max().normalize())
         self.date_feature_names_[col] = names

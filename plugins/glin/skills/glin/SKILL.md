@@ -55,7 +55,7 @@ Read the audit like this:
 - For a binary target, scores and `base_logit` are log-odds of `score_class`. A positive score pushes toward `score_class`. A negative score pushes toward the other class.
 - For a multiclass target, each term has `score_by_class`.
 - `additivity_verified` must be true. It proves that the scores add up to the model probability.
-- `warnings` lists inputs that the model never saw (`unseen_category`, `out_of_range`, `unparseable_number`, `unparseable_date`). Tell the user that the prediction is less reliable.
+- `warnings` lists inputs that the model never saw (`unseen_category`, `out_of_range`, `unparseable_number`, `unparseable_date`). Tell the user that the prediction is less reliable. `ambiguous_date_format` and `date_order_mismatch` tell you that glin read a date in an order that the user possibly did not mean. Show the user the `parsed_as` date. If it is not correct, send the date again as ISO `YYYY-MM-DD`.
 - `missing_features` lists absent inputs. A missing field is not an average value. Say which fields were missing.
 
 For many rows, call `predict` once for each row. Then rank the rows and give the reason for each.

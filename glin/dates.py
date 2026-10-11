@@ -84,6 +84,32 @@ def detect_dayfirst(series: pd.Series) -> tuple[bool, str | None]:
     return False, None
 
 
+def numeric_order(series: pd.Series, dayfirst: bool) -> str | None:
+    """Training order of numeric ``dd/mm`` or ``mm/dd`` values: ``"dmy"``,
+    ``"mdy"``, or None when the column has no such values (ISO or month names)."""
+    if not _text(series).str.match(_NUMERIC_DMY_RE, na=False).any():
+        return None
+    return "dmy" if dayfirst else "mdy"
+
+
+def order_issue(value, order: str | None) -> str | None:
+    """Predict-time warning code for a numeric ``a/b/yyyy`` input whose
+    day/month order does not follow the training ``order``.
+
+    ``ambiguous_date_format``: the column had no numeric dates and both fields
+    could be the month. ``date_order_mismatch``: the input cannot be in the
+    training order, so the parser read it the other way round.
+    """
+    match = _NUMERIC_DMY_RE.match(str(value).strip())
+    if not match:
+        return None
+    first, second = int(match[1]), int(match[2])
+    if order is None:
+        return "ambiguous_date_format" if first != second and max(first, second) <= 12 else None
+    month = second if order == "dmy" else first
+    return "date_order_mismatch" if month > 12 else None
+
+
 def _to_utc(part: pd.Series, dayfirst: bool) -> pd.Series:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
