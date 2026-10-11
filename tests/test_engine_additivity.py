@@ -352,3 +352,20 @@ def test_continuous_shape_range_for_large_values_has_no_exponent():
     shape = engine.global_importance(bundle)["terms"][0]["shape"]
     for key in ("highest", "lowest"):
         assert "e" not in shape[key]["range"]
+
+
+def test_integer_column_names_train_predict_and_explain():
+    rng = np.random.RandomState(0)
+    n = 300
+    dates = pd.date_range("2023-01-01", periods=n, freq="D")
+    df = pd.DataFrame({0: dates.strftime("%Y-%m-%d"), 1: rng.normal(size=n)})
+    df[2] = np.where(df[1] > 0, "a", "b")
+    bundle = engine.train_model(df, 2, model_name="int_names", hyperparameters={"interactions": 0, "outer_bags": 2})
+    record = {0: "2023-05-01", 1: 0.4}
+
+    prediction = engine.predict_record(bundle, record)
+    explanation = engine.explain_record(bundle, record)
+
+    assert prediction["predicted_class"] in bundle["target_classes"]
+    assert explanation["additivity_verified"]
+    assert explanation["missing_features"] == []

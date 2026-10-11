@@ -58,6 +58,7 @@ The numbers in parentheses are GitHub issues.
 - The Excel loader kept some footnote rows, dropped some real final rows, accepted `true` as a sheet, and used MCP names in CLI errors (#53).
 - The interpret library wrote its progress messages to stderr during `serve` (#50).
 - The sdist included the `.claude/` and `.github/` folders (#55).
+- `fit` failed on a frame with integer column names and a date column. glin now changes column names to text. Column names that are the same as text, such as `0` and `"0"`, give an error (#57).
 
 ## Earlier versions
 

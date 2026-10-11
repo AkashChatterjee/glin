@@ -714,3 +714,38 @@ def test_train_model_forwards_drop_warnings_once():
     for col in ("row_id", "same"):
         assert sum(f"'{col}'" in w for w in bundle["warnings"]) == 1
     assert not any("'spend'" in w for w in bundle["warnings"])
+
+
+def _int_named_frame(n=200):
+    rng = np.random.RandomState(0)
+    dates = pd.date_range("2023-01-01", periods=n, freq="D")
+    return pd.DataFrame({0: dates.strftime("%Y-%m-%d"), 1: rng.normal(size=n), 3: rng.choice(["a", "b", "c"], n)})
+
+
+def test_integer_column_names_with_a_date_column_fit_and_transform():
+    df = _int_named_frame()
+    pre = _fit(df)
+
+    out = pre.transform(df)
+
+    assert {"0__month", "0__days_since_start", "1", "3"} <= set(out.columns)
+    assert len(out) == len(df)
+
+
+def test_check_inputs_accepts_integer_or_string_keys():
+    pre = _fit(_int_named_frame())
+
+    by_int = pre.check_inputs({0: "2030-01-01", 1: 99.0, 3: "zzz"})
+    by_str = pre.check_inputs({"0": "2030-01-01", "1": 99.0, "3": "zzz"})
+
+    assert by_int == by_str
+    assert {(w["feature"], w["issue"]) for w in by_int["warnings"]} == {
+        ("0", "out_of_range"), ("1", "out_of_range"), ("3", "unseen_category")
+    }
+
+
+def test_column_names_that_collide_as_text_are_rejected():
+    df = pd.DataFrame({0: [1.0, 2.0, 3.0], "0": [4.0, 5.0, 6.0]})
+
+    with pytest.raises(ValueError, match="unique as text"):
+        _fit(df)
