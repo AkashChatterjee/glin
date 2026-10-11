@@ -114,7 +114,25 @@ def test_serve_accepts_deprecated_mode_stdio(monkeypatch):
     result = CliRunner().invoke(cli.main, ["serve", "--mode", "stdio"])
 
     assert result.exit_code == 0
-    assert calls == [{"allowed_dirs": None}]
+    assert calls == [{"allowed_dirs": None, "max_file_mb": 200}]
+
+
+def test_serve_passes_allow_dir_and_max_file_mb(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
+
+    result = CliRunner().invoke(
+        cli.main, ["serve", "--allow-dir", str(tmp_path), "--max-file-mb", "50"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"allowed_dirs": [tmp_path], "max_file_mb": 50}]
+
+
+def test_serve_rejects_non_positive_max_file_mb():
+    result = CliRunner().invoke(cli.main, ["serve", "--max-file-mb", "0"])
+
+    assert result.exit_code != 0
 
 
 def test_serve_rejects_unknown_mode():

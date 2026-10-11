@@ -485,6 +485,70 @@ async def test_csv_path_symlink_inside_allowed_dir_is_accepted(models_root, tmp_
     assert result["model_name"] == "guarded"
 
 
+def test_default_allowed_dirs_skip_root_working_dir(monkeypatch, tmp_path):
+    home = tmp_path / "home" / "me"
+    home.mkdir(parents=True)
+    monkeypatch.setattr(server.Path, "home", lambda: home)
+    monkeypatch.setattr(server.Path, "cwd", lambda: server.Path("/"))
+    assert server.default_allowed_dirs() == [home.resolve()]
+    monkeypatch.setattr(server.Path, "cwd", lambda: home.parent)
+    assert server.default_allowed_dirs() == [home.resolve()]
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(server.Path, "cwd", lambda: project)
+    assert server.default_allowed_dirs() == [home.resolve(), project.resolve()]
+
+
+def test_default_allowed_dirs_skip_root_home(monkeypatch):
+    monkeypatch.setattr(server.Path, "home", lambda: server.Path("/"))
+    monkeypatch.setattr(server.Path, "cwd", lambda: server.Path("/"))
+    assert server.default_allowed_dirs() == []
+
+
+def test_root_allowed_dir_warns_on_stderr(models_root, capsys):
+    server.build_server(models_root=models_root, allowed_dirs=[server.Path("/")])
+    assert "filesystem root" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_empty_allowed_dirs_disables_csv_path(models_root, tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "default_allowed_dirs", lambda: [tmp_path])
+    data = tmp_path / "data.csv"
+    data.write_text(_fixture_csv())
+    with pytest.raises(ToolError, match="csv_path is disabled.*--allow-dir"):
+        await _train_with_path(models_root, [], data)
+    mcp = server.build_server(models_root=models_root, allowed_dirs=[])
+    result = await _call(
+        mcp,
+        "train_model",
+        {"csv_content": _fixture_csv(), "target_column": "churn", "model_name": "inline"},
+    )
+    assert result["model_name"] == "inline"
+
+
+@pytest.mark.asyncio
+async def test_csv_path_over_size_limit_is_rejected_before_reading(models_root, tmp_path):
+    big = tmp_path / "big.csv"
+    with open(big, "wb") as fh:
+        fh.truncate(3 * 1024**2)
+    mcp = server.build_server(models_root=models_root, allowed_dirs=[tmp_path], max_file_mb=2)
+    with pytest.raises(ToolError, match=r"3 MB, above .* limit of 2 MB .*--max-file-mb"):
+        await _call(
+            mcp,
+            "train_model",
+            {"csv_path": str(big), "target_column": "churn", "model_name": "big"},
+        )
+
+
+def test_default_size_limit_rejects_sparse_file(tmp_path):
+    big = tmp_path / "big.csv"
+    with open(big, "wb") as fh:
+        fh.truncate((server.DEFAULT_MAX_FILE_MB + 1) * 1024**2)
+    with pytest.raises(ValueError, match="--max-file-mb"):
+        server.resolve_csv_path(str(big), [tmp_path])
+    assert server.resolve_csv_path(str(big), [tmp_path], max_file_mb=None) == big.resolve()
+
+
 @pytest.mark.asyncio
 async def test_date_column_trains_inspects_and_predicts_over_mcp(models_root):
     rng = np.random.RandomState(0)

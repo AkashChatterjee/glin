@@ -69,4 +69,4 @@ Call `explain_model` to answer "what drives this outcome?". It ranks every featu
 
 - Never claim more than the holdout shows. State how the metrics were measured.
 - `train_model` is destructive when `overwrite=True`. Ask before you replace a model the user did not create in this session.
-- `csv_path` must be inside the home directory or the working directory of the server. Otherwise the server rejects the path.
+- `csv_path` must be inside a directory that the server allows: by default the home directory, and the working directory when it is not `/`. The file must also be smaller than the size limit (200 MB by default). Otherwise the server rejects the path. If the error says `csv_path` is disabled, use `csv_content`.

@@ -155,7 +155,7 @@ Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All t
   - To send a date, pass the raw value, for example `"signup_date": "2024-03-06"`. glin derives the same `signup_date__*` terms as at training time. Contributions name each term, for example `signup_date__day_of_week` = `sat`. A date that is absent, blank or not parseable counts as missing. A date that does not parse also adds a warning.
 - `train_model(target_column, model_name, csv_path=None, csv_content=None, overwrite=False, hyperparameters=None, holdout_fraction=0.2, holdout_group_column=None, suppression_codes=None)` trains a new model. It can also retrain an existing model on new data with `overwrite=True`. If the name exists and `overwrite` is not set, the call fails. Nothing is replaced by accident.
   - Pass exactly one of `csv_path` and `csv_content`.
-  - `csv_path` is a `.csv`, `.xlsx` or `.xls` file that the server can read. See [Restricting `csv_path`](#restricting-csv_path). Use it for local stdio setups. It works for files of any size, and the agent never copies the file contents.
+  - `csv_path` is a `.csv`, `.xlsx` or `.xls` file that the server can read. See [Restricting `csv_path`](#restricting-csv_path). Use it for local stdio setups. It works for large files (up to 200 MB by default), and the agent never copies the file contents.
   - `csv_content` is the raw CSV text. Use it only when the client and the server share no file system, and only for small data. Tens of thousands of rows in a tool argument are slow and use a lot of context.
   - `holdout_group_column` makes the holdout a [grouped holdout](#grouped-holdout).
   - `suppression_codes` replaces the tokens that count as missing in numeric columns. The default is `["SUPP", "NE", "NP", "z", "*", ".."]`. See [Feature columns: supported today](#feature-columns-supported-today).
@@ -195,13 +195,31 @@ Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All t
 
 ## Restricting `csv_path`
 
-`train_model(csv_path=...)` reads only a regular file that ends in `.csv`, `.xlsx` or `.xls`. The name `csv_path` stays for compatibility, and it also takes Excel files. The fully resolved path (symlinks and `..` followed) must be inside an allowed directory. glin rejects directories, devices, other extensions, missing files, path traversal and symlinks that point outside. The error never includes file contents. By default, the allowed directories are the home directory and the working directory of the server. To change them, use a repeatable flag:
+`train_model(csv_path=...)` reads only a regular file that ends in `.csv`, `.xlsx` or `.xls`. The name `csv_path` stays for compatibility, and it also takes Excel files. The fully resolved path (symlinks and `..` followed) must be inside an allowed directory. glin rejects directories, devices, other extensions, missing files, path traversal and symlinks that point outside. The error never includes file contents.
+
+By default, the allowed directories are:
+
+- the home directory;
+- the working directory of the server, but only when it is not a filesystem root (`/`) and not a parent of the home directory (for example `/Users`).
+
+Some clients, for example Claude Desktop on macOS, start the server from `/`. Then only the home directory is allowed. Claude Code starts the server from the project directory, so that directory is also allowed. To set the directories yourself, use a repeatable flag:
 
 ```bash
 glin serve --allow-dir /data/csvs --allow-dir /srv/uploads
 ```
 
-`csv_content` is not affected. In the config of your MCP client, add the flags to `args`, for example `["serve", "--allow-dir", "/data/csvs"]`.
+If an allowed directory is `/`, glin writes a warning to stderr, because then `csv_path` can read any `.csv`, `.xlsx` or `.xls` file on the machine. In Python, `build_server(allowed_dirs=[])` allows no directories. Then `csv_path` is disabled and only `csv_content` works.
+
+glin rejects a file that is larger than 200 MB. It checks the size before it reads the file. To change the limit, use `--max-file-mb`, for example `glin serve --max-file-mb 500`.
+
+`csv_content` is not affected by these rules. In the config of your MCP client, add the flags to `args`, for example `["serve", "--allow-dir", "/data/csvs"]`.
+
+These checks have two known limits. Both need write access inside an allowed directory:
+
+- A hard link inside an allowed directory to a file outside it is read. A hard link is the file itself, so glin cannot see where it came from.
+- glin checks the path and then reads it. If the path changes between the check and the read, glin reads the new target.
+
+Thus, do not allow a directory that untrusted users or processes can write to.
 
 The older flag `--mode stdio` is still accepted so that existing client configs keep working. glin ignores it. You can remove it from `args`.
 
