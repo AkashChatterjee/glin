@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import io
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -10,7 +12,7 @@ from typing import Any, Optional
 import pandas as pd
 from mcp.types import ToolAnnotations
 
-from glin import engine, prompts
+from glin import __version__, engine, prompts
 from glin.engine import DEFAULT_MODELS_ROOT
 from glin.hyperparameters import HYPERPARAMETERS
 from glin.loaders import EXCEL_SUFFIXES, HeaderRows, SheetRef, load_table
@@ -28,6 +30,14 @@ DEFAULT_MAX_FILE_MB = 200
 
 def _is_fs_root(path: Path) -> bool:
     return path.parent == path
+
+
+def _new_server() -> MCPServer:
+    if "version" in inspect.signature(MCPServer.__init__).parameters:  # mcp 2.x
+        return MCPServer("glin", version=__version__)
+    mcp = MCPServer("glin")
+    mcp._mcp_server.version = __version__  # mcp 1.x reports its own version otherwise
+    return mcp
 
 
 def default_allowed_dirs() -> list[Path]:
@@ -116,7 +126,7 @@ def build_server(
     """`allowed_dirs=None` uses `default_allowed_dirs()`; `[]` disables csv_path."""
     allowed = default_allowed_dirs() if allowed_dirs is None else list(allowed_dirs)
     warn_root_dirs(allowed)
-    mcp = MCPServer("glin")
+    mcp = _new_server()
 
     def tool(annotations: ToolAnnotations):
         # mcp 2.x hides non-ToolError messages from clients; ours are meant for the agent.
@@ -381,7 +391,10 @@ def run_stdio(
     allowed_dirs: Optional[list[Path]] = None,
     max_file_mb: Optional[float] = DEFAULT_MAX_FILE_MB,
 ) -> None:
-    build_server(
+    mcp = build_server(
         models_root=models_root, allowed_dirs=allowed_dirs, max_file_mb=max_file_mb
-    ).run(transport="stdio")
+    )
+    # The SDK sets INFO logging; interpret then logs every boosting stage to stderr.
+    logging.getLogger("interpret").setLevel(logging.WARNING)
+    mcp.run(transport="stdio")
 

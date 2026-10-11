@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+import pytest
 from click.testing import CliRunner
 
+import glin
 from glin import cli, engine
 
 
@@ -107,21 +109,61 @@ def test_train_prints_leakage_warnings_and_still_succeeds(tmp_path, monkeypatch)
     assert (tmp_path / "models" / "m" / engine.BUNDLE_FILENAME).exists()
 
 
-def test_serve_accepts_deprecated_mode_stdio(monkeypatch):
+def _runner() -> CliRunner:
+    try:  # click < 8.2 mixes stderr into stdout unless told otherwise
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()
+
+
+def test_version_option_prints_package_version():
+    result = CliRunner().invoke(cli.main, ["--version"])
+
+    assert result.exit_code == 0
+    assert glin.__version__ in result.output
+
+
+def test_serve_accepts_deprecated_mode_stdio_with_notice_on_stderr_only(monkeypatch):
     calls = []
     monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
 
-    result = CliRunner().invoke(cli.main, ["serve", "--mode", "stdio"])
+    result = _runner().invoke(cli.main, ["serve", "--mode", "stdio"])
 
     assert result.exit_code == 0
     assert calls == [{"allowed_dirs": None, "max_file_mb": 200}]
+    assert result.stdout == ""
+    assert result.stderr.count("deprecated") == 1
+
+
+def test_serve_without_mode_writes_nothing(monkeypatch):
+    monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: None)
+
+    result = _runner().invoke(cli.main, ["serve"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "" and result.stderr == ""
+
+
+@pytest.mark.parametrize("mode", ["http", "sse"])
+def test_serve_http_mode_explains_removal(monkeypatch, mode):
+    calls = []
+    monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
+
+    result = _runner().invoke(cli.main, ["serve", "--mode", mode])
+
+    assert result.exit_code == 2
+    assert calls == []
+    assert (
+        "HTTP mode was removed in v0.1.4; v0.1.3 is the last release with it. "
+        "glin runs over stdio only."
+    ) in result.stderr
 
 
 def test_serve_passes_allow_dir_and_max_file_mb(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
 
-    result = CliRunner().invoke(
+    result = _runner().invoke(
         cli.main, ["serve", "--allow-dir", str(tmp_path), "--max-file-mb", "50"]
     )
 
@@ -130,12 +172,12 @@ def test_serve_passes_allow_dir_and_max_file_mb(monkeypatch, tmp_path):
 
 
 def test_serve_rejects_non_positive_max_file_mb():
-    result = CliRunner().invoke(cli.main, ["serve", "--max-file-mb", "0"])
+    result = _runner().invoke(cli.main, ["serve", "--max-file-mb", "0"])
 
     assert result.exit_code != 0
 
 
 def test_serve_rejects_unknown_mode():
-    result = CliRunner().invoke(cli.main, ["serve", "--mode", "http"])
+    result = CliRunner().invoke(cli.main, ["serve", "--mode", "ftp"])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
