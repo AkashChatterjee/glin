@@ -273,11 +273,13 @@ Pass `holdout_group_column="state"` (or any other column) to `train_model`. glin
 
 - The split uses a seed that does not depend on `random_state`, so every trial uses the same rows. glin tries 25 seeded group orders. It keeps the order whose holdout class shares are closest to the overall class shares.
 - The group column stays a normal feature. A held-out group therefore takes the unseen-category path at prediction time. glin fits the preprocessing on the training rows only.
-- `evaluation` also reports `holdout_group_column`, `holdout_groups` and `train_groups`. Missing values count as one group. glin also saves the column name in the model metadata.
+- glin groups text values in the same way as the preprocessor: it removes spaces at the start and end and changes letters to lowercase. Thus `"S06"` and `"s06 "` are one group, and that group is on one side of the split only. Blank text, `nan` and `none` are missing values. If two or more spellings become one group, glin returns a warning.
+- `evaluation` also reports `holdout_group_column`, `holdout_groups` and `train_groups`. These counts use the normalised groups. Missing values count as one group. glin also saves the column name in the model metadata.
 - glin rejects these cases with a clear error:
   - the column does not exist, or it is the target;
   - fewer than 5 distinct non-null groups exist;
-  - one group has more than half of the rows;
+  - one group has more than half of the rows. If this group is the missing values, the error says so. Fill the missing values, or use a different column;
+  - every group is too large for the holdout target. The error gives the size of the smallest group. Use a larger `holdout_fraction`;
   - the holdout has fewer than 2 classes, or the split leaves a class out of training.
 
   If `holdout_fraction=0`, glin ignores the column and returns a warning.

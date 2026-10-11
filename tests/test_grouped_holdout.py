@@ -212,3 +212,77 @@ async def test_mcp_train_model_surfaces_group_errors(tmp_path):
                 "holdout_group_column": "nope",
             },
         )
+
+
+def test_groups_too_large_for_fraction_get_their_own_error():
+    df = pd.concat(
+        [_grouped_frame(n_groups=1, per_group=300 + 7 * g, seed=g).assign(state=f"S{g}") for g in range(6)],
+        ignore_index=True,
+    )
+    with pytest.raises(ValueError, match="every group .* larger than the holdout target") as err:
+        engine.train_model(
+            df, "y", model_name="m", holdout_fraction=0.05,
+            holdout_group_column="state", hyperparameters=FAST,
+        )
+    assert "smallest group is 300 rows" in str(err.value)
+    assert "classes are concentrated" not in str(err.value)
+
+
+def test_spelling_variants_of_a_group_stay_on_one_side():
+    df = _grouped_frame(n_groups=8)
+    variants = df.index[::2]
+    df.loc[variants, "state"] = df.loc[variants, "state"].str.lower() + " "
+    y, k = _encode(df)
+    split = split_by_group(df["state"], y, k, 0.2, seed=0, column="state")
+    clean = df["state"].str.strip().str.lower()
+    assert not set(clean.iloc[split.train_idx]) & set(clean.iloc[split.holdout_idx])
+    assert split.holdout_groups + split.train_groups == 8
+    assert any("16 distinct spellings" in w and "8 groups" in w for w in split.warnings)
+    bundle = _train(df, holdout_group_column="state")
+    assert any("distinct spellings" in w for w in bundle["warnings"])
+
+
+def test_dominant_missing_group_names_the_missing_values():
+    df = _grouped_frame(n_groups=10)
+    df.loc[df.sample(frac=0.6, random_state=1).index, "state"] = np.nan
+    with pytest.raises(ValueError, match="missing values .* fill the missing values"):
+        _train(df, holdout_group_column="state")
+
+
+def _plain_greedy(sizes, target_rows, rng):
+    chosen = np.zeros(len(sizes), dtype=bool)
+    held = 0
+    for g in rng.permutation(len(sizes)):
+        if abs(held + sizes[g] - target_rows) < abs(held - target_rows):
+            chosen[g] = True
+            held += sizes[g]
+    return chosen
+
+
+def test_vectorised_group_walk_matches_the_plain_loop():
+    from glin.grouped_split import _pick_holdout_groups
+
+    rng = np.random.RandomState(0)
+    for case in range(40):
+        sizes = rng.zipf(1.6, rng.randint(5, 400)) if case % 2 else rng.randint(1, 50, rng.randint(5, 400))
+        target = sizes.sum() * rng.uniform(0.01, 0.5)
+        for seed in range(3):
+            fast = _pick_holdout_groups(sizes, target, np.random.RandomState(seed))
+            slow = _plain_greedy(sizes, target, np.random.RandomState(seed))
+            assert np.array_equal(fast, slow)
+
+
+def test_group_walk_is_much_faster_than_the_plain_loop():
+    import time
+
+    from glin.grouped_split import _pick_holdout_groups
+
+    sizes = np.random.RandomState(0).poisson(5, 200_000) + 1
+    target = sizes.sum() * 0.2
+
+    def timed(fn):
+        start = time.perf_counter()
+        fn(sizes, target, np.random.RandomState(0))
+        return time.perf_counter() - start
+
+    assert timed(_pick_holdout_groups) * 5 < timed(_plain_greedy)

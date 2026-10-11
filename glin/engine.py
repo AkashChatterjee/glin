@@ -224,6 +224,7 @@ def train_model(
                 HOLDOUT_SPLIT_SEED,
                 holdout_group_column,
             )
+            group_warnings.extend(group_split.warnings)
             n_holdout = len(group_split.holdout_idx)
             if n_holdout < MIN_HOLDOUT_ROWS or len(group_split.train_idx) < MIN_ROWS:
                 raise ValueError(
