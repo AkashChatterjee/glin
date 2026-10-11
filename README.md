@@ -4,11 +4,22 @@
 
 <!-- mcp-name: io.github.AkashChatterjee/glin -->
 
-glin is a CLI tool and Python library. It gives AI agents a fast, statistical "gut feeling" (System 1 thinking).
+glin is an [MCP](https://modelcontextprotocol.io/) plugin. It gives AI agents a fast, statistical "gut feeling" (System 1 thinking). You install it into an agent such as Claude Code, Claude Desktop or Cursor. Then you talk to the agent in plain language. The agent calls the glin tools.
 
-glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a CSV. It then gives the model to LLM agents through [MCP](https://modelcontextprotocol.io/), locally over stdio. Each prediction comes with an exact breakdown of the features that drove it. The breakdown comes from the additive structure of the model. It is not a SHAP or LIME approximation.
+glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a CSV or Excel file. Each prediction comes with an exact breakdown of the features that drove it. The breakdown comes from the additive structure of the model. It is not a SHAP or LIME approximation.
+
+To use glin, you do not write code and you do not type glin commands. The agent trains, tunes, predicts and explains. The server runs on your machine and talks to the agent over stdio.
 
 > glin runs locally only (stdio). It has no remote or HTTP mode. Version 0.1.3 is the last release that had one.
+
+## What you can ask the agent
+
+- "Train a classifier on `~/data/leads.csv` that predicts `converted`."
+- "Which of these 3 deals should I prioritize?" The agent runs each deal through the model and gives the reasons.
+- "What drives churn in this model?"
+- "Tune the model, and tell me how good it really is."
+
+See [Example: ask Claude directly](#example-ask-claude-directly) for a full conversation.
 
 **Changelog:** [CHANGELOG.md](https://github.com/AkashChatterjee/glin/blob/main/CHANGELOG.md) lists the changes in each release.
 
@@ -16,15 +27,16 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
 
 ## Contents
 
+- [What you can ask the agent](#what-you-can-ask-the-agent)
 - [Install](#install)
-  - [Install as a Claude Code plugin](#install-as-a-claude-code-plugin)
+  - [Claude Code](#claude-code)
+  - [Other MCP clients](#other-mcp-clients)
   - [MCP Registry](#mcp-registry)
   - [Install for development](#install-for-development)
 - [Train a model](#train-a-model)
   - [Model names](#model-names)
-  - [List and delete models](#list-and-delete-models)
   - [Excel input](#excel-input-xlsx--xls)
-- [Use glin with an MCP client](#use-glin-with-an-mcp-client)
+  - [Command line helpers (optional)](#command-line-helpers-optional)
 - [Tools exposed over MCP](#tools-exposed-over-mcp)
 - [Prompts exposed over MCP](#prompts-exposed-over-mcp)
 - [Restricting `csv_path`](#restricting-csv_path)
@@ -43,28 +55,13 @@ glin trains an [Explainable Boosting Machine](https://interpret.ml/) (EBM) on a 
 
 ## Install
 
-The PyPI package is named `glin-ml`. The name `glin` belongs to an unrelated project. The CLI command and the Python import are both `glin`.
+glin needs [`uv`](https://docs.astral.sh/uv/) on your machine. The MCP client starts the server with `uvx`. You do not install glin yourself.
 
-Choose one command:
+The server code is the PyPI package `glin-ml`. The name `glin` belongs to an unrelated project. `uvx` downloads `glin-ml` the first time the client starts the server, and caches it.
 
-```bash
-uv tool install glin-ml     # recommended: installs the `glin` command in an isolated environment
-pipx install glin-ml        # same result, with pipx
-pip install glin-ml         # installs into the active environment
-```
+### Claude Code
 
-To read Excel files (`.xlsx` and `.xls`), install the optional extra: `uv tool install 'glin-ml[excel]'` or `pip install 'glin-ml[excel]'`. If you run the server with uvx, use `uvx --from 'glin-ml[excel]' glin serve`. See [Excel input](#excel-input-xlsx--xls).
-
-Then check the install:
-
-```bash
-glin --help
-glin --version
-```
-
-### Install as a Claude Code plugin
-
-The plugin adds the glin MCP server and a skill. The skill tells the agent when and how to build, tune, predict with and explain a model. The plugin starts the server with [`uvx`](https://docs.astral.sh/uv/), so you must have `uv` installed. You do not need to install glin first. The plugin runs `uvx --from 'glin-ml[excel]>=0.1.4' glin serve`. This command includes Excel support, and it does not start a version older than 0.1.4.
+The plugin adds the glin MCP server and a skill. The skill tells the agent when and how to build, tune, predict with and explain a model. The plugin runs `uvx --from 'glin-ml[excel]>=0.1.4' glin serve`. This command includes Excel support, and it does not start a version older than 0.1.4.
 
 In Claude Code, run:
 
@@ -74,6 +71,29 @@ In Claude Code, run:
 ```
 
 The files are in [`.claude-plugin/marketplace.json`](https://github.com/AkashChatterjee/glin/blob/main/.claude-plugin/marketplace.json) and [`plugins/glin/`](https://github.com/AkashChatterjee/glin/tree/main/plugins/glin).
+
+### Other MCP clients
+
+Add glin to the config of your MCP client, for example Claude Desktop or Cursor. In Claude Desktop, the file is `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "glin": {
+      "command": "uvx",
+      "args": ["--from", "glin-ml[excel]", "glin", "serve"]
+    }
+  }
+}
+```
+
+Restart the client. The glin tools and prompts then appear. The `[excel]` extra adds support for `.xlsx` and `.xls` files. Remove it if you only use CSV files. See [Excel input](#excel-input-xlsx--xls).
+
+The server gives the glin version in `serverInfo.version`. `glin serve` writes only MCP messages to stdout. Log messages go to stderr. During `serve`, glin sets the log level of the `interpret` library to WARNING, so each training does not fill the client log.
+
+To add server flags such as `--allow-dir`, put them after `serve` in `args`. See [Restricting `csv_path`](#restricting-csv_path).
+
+To run glin from a copy that is already installed (`uv tool install glin-ml`, `pipx install glin-ml` or `pip install glin-ml`), set `"command": "glin"` and `"args": ["serve"]`.
 
 ### MCP Registry
 
@@ -91,21 +111,25 @@ cd glin
 pip install -e ".[dev]"      # also installs the Excel libraries, and xlwt to build .xls test files
 ```
 
+To try the checkout in an MCP client, set `"command"` to the `glin` program in your environment (for example `/path/to/glin/.venv/bin/glin`) and `"args"` to `["serve"]`.
+
 glin works with the `mcp` 1.x and 2.x Python SDK lines (`mcp>=1.21.1,<3`). Versions before 1.21.1 do not work. mcp 1.21.0 and earlier fail on import with pydantic 2.14 and later. The earliest 1.x versions also do not have the API that glin uses. To test one line, add a constraint. For example: `pip install -e ".[dev]" "mcp>=2,<3"`.
 
 The `Tests` GitHub Actions workflow ([.github/workflows/test.yml](.github/workflows/test.yml)) runs the test suite on each pull request and on each push to `main`. It runs on Python 3.10 and 3.12 with the latest mcp 1.x and the latest mcp 2.x. It also runs on Python 3.10 with the lowest supported mcp (`mcp==1.21.1`).
 
 ## Train a model
 
-```bash
-glin train path/to/data.csv --target churn --name churn_v1
-```
+Ask the agent. Give it a data file and the column to predict:
 
-glin saves each model in `~/.glin/models/<name>/`. During training, glin prints a live line that shows the boosting progress. To stop this line, add `--quiet`. The stage messages still print.
+> "Train a classifier on `~/data/churn.csv` that predicts `churn`. Call it `churn_v1`."
+
+The agent calls `train_model`. For a careful build, ask the agent to use the `build_classifier` prompt. It cleans the data, drops leakage, tunes the model and reports the honest performance. See [Prompts exposed over MCP](#prompts-exposed-over-mcp).
+
+glin saves each model in `~/.glin/models/<name>/`.
 
 ### Model names
 
-When you make a model (`glin train --name`, or `model_name` in `train_model`), the name must obey this rule:
+When you make a model (`model_name` in `train_model`, or `glin train --name`), the name must obey this rule:
 
 - Use 1 to 64 characters.
 - Use only letters, digits, `-`, `_` and `.`.
@@ -116,20 +140,17 @@ When you use or delete a model (`inspect_model`, `predict`, `explain_model`, `gl
 
 glin rejects a name that does not obey the applicable rule. The error message gives the rule. glin also makes sure that the model folder is directly in the models folder, also when a symbolic link is in the path. Thus a model name cannot write, read or delete files outside the models folder.
 
-### List and delete models
-
-```bash
-glin list
-glin delete churn_v1        # asks for confirmation
-glin delete churn_v1 --yes  # skips the question
-```
-
 ### Excel input (`.xlsx` / `.xls`)
 
-Spreadsheets from governments and analysts train directly. This includes banner rows and merged headers. Excel support is an optional extra, so the base install stays small. `openpyxl` reads `.xlsx` files. `xlrd` reads old `.xls` files.
+Spreadsheets from governments and analysts train directly. This includes banner rows and merged headers. Excel support is an optional extra, so the base install stays small. `openpyxl` reads `.xlsx` files. `xlrd` reads old `.xls` files. The Claude Code plugin includes the extra. For other clients, use `glin-ml[excel]` in the server command (see [Other MCP clients](#other-mcp-clients)).
+
+Ask the agent in plain language, for example:
+
+> "Train a classifier on `~/data/report.xlsx`, sheet `Data 2023`, header rows 3-4, that predicts `outcome`."
+
+The agent passes `sheet` and `header_rows` to `train_model`. The rules below apply to both. The flags `--sheet` and `--header-rows` are the command line forms of these arguments:
 
 ```bash
-pip install 'glin-ml[excel]'
 glin train report.xlsx --target outcome --name report_v1                   # one sheet
 glin train report.xlsx --sheet "Data 2023" --target outcome --name r_v1    # name, or 1-based position
 glin train report.xlsx --sheet 2 --header-rows 3-4 --target outcome --name r_v1
@@ -143,22 +164,22 @@ glin train report.xlsx --sheet 2 --header-rows 3-4 --target outcome --name r_v1
 - **Empty rows and columns:** glin drops fully empty rows and columns.
 - **CSV files:** CSV behavior does not change. `--sheet` and `--header-rows` are errors for CSV files.
 
-## Use glin with an MCP client
+### Command line helpers (optional)
 
-Add glin to the config of your MCP client, for example Claude Desktop or Cursor. In Claude Desktop, the file is `claude_desktop_config.json`:
+The `glin` program is mainly the MCP server (`glin serve`). It also has small helpers for a terminal. You do not need them to use glin. They are useful for scripts, and for checks outside an agent. Install glin first (`uv tool install glin-ml`).
 
-```json
-{
-  "mcpServers": {
-    "glin": {
-      "command": "glin",
-      "args": ["serve"]
-    }
-  }
-}
+The agent can list models (`list_models`). It has no tool to delete a model. To delete one, use `glin delete` or remove the folder in `~/.glin/models/`.
+
+```bash
+glin --help
+glin --version
+glin train path/to/data.csv --target churn --name churn_v1
+glin list
+glin delete churn_v1        # asks for confirmation
+glin delete churn_v1 --yes  # skips the question
 ```
 
-The server gives the glin version in `serverInfo.version`. `glin serve` writes only MCP messages to stdout. Log messages go to stderr. During `serve`, glin sets the log level of the `interpret` library to WARNING, so each training does not fill the client log.
+During training, `glin train` prints a live line that shows the boosting progress. To stop this line, add `--quiet`. The stage messages still print. `glin train` trains on every row with the default hyperparameters, and it has no holdout.
 
 ## Tools exposed over MCP
 
