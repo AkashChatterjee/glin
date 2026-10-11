@@ -294,7 +294,7 @@ def test_percent_only_stripped_when_trailing():
     assert np.isnan(pre.transform({"x": "%5"})["x"].iloc[0])
 
 
-@pytest.mark.parametrize("code", ["SUPP", "NE", "NP", "z"])
+@pytest.mark.parametrize("code", ["SUPP", "NE", "NP", "z", "*", ".."])
 def test_each_default_suppression_code_is_missing_not_categorical(code):
     values = ["10", "20.5", "30", code]
     pre = _fit(_col(values))
@@ -375,7 +375,7 @@ def test_unrecognized_repeated_tokens_in_numeric_column_warn():
     assert "x" in pre.numeric_columns_
     [warning] = pre.warnings_
     assert "'x'" in warning and "'c'" in warning
-    assert "suppression_codes=['SUPP', 'NE', 'NP', 'z', 'x', 'c']" in warning
+    assert "suppression_codes=['SUPP', 'NE', 'NP', 'z', '*', '..', 'x', 'c']" in warning
 
 
 def test_unrecognized_code_warning_is_quiet_when_codes_are_known():
@@ -399,6 +399,140 @@ def test_unrecognized_code_warning_ignores_non_code_like_leftovers(leftovers):
     pre = _fit(df)
     assert "x" in pre.numeric_columns_
     assert pre.warnings_ == []
+
+
+def _x(values) -> pd.DataFrame:
+    return pd.DataFrame({"x": values})
+
+
+def test_unknown_codes_below_numeric_threshold_warn():
+    values = [str(i) for i in range(1, 21)] + ["*", "*", "<5", "<5", "NA", "NA", "S", "S", "—", "—"]
+    pre = _fit(_x(values))
+    assert pre.categorical_columns_ == ["x"]
+    [warning] = pre.warnings_
+    assert "below the 80% numeric threshold" in warning
+    assert "'<5' x2" in warning and "'—' x2" in warning and "'*' x" not in warning
+    assert "suppression_codes=['SUPP', 'NE', 'NP', 'z', '*', '..', '<5', 'NA', 'S', '—']" in warning
+
+
+def test_unknown_codes_warning_with_custom_codes():
+    values = [str(i) for i in range(1, 9)] + ["x", "x", "SUPP", "SUPP", "SUPP"]
+    pre = _fit(_x(values), suppression_codes=["x"])
+    assert pre.categorical_columns_ == ["x"]
+    [warning] = pre.warnings_
+    assert "suppression_codes=['x', 'SUPP']" in warning
+    retrained = _fit(_x(values), suppression_codes=["x", "SUPP"])
+    assert retrained.numeric_columns_ == ["x"] and retrained.warnings_ == []
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["a", "b", "c", "d", "1", "2"] * 5,
+        ["1", "2", "3"] + ["low", "high"] * 3 + ["mid"],
+        ["1", "2", "3", "4", "5", "6", "7", "8", "not applicable", "not applicable", "-", "-"],
+    ],
+    ids=["mostly_text", "single_token", "long_token"],
+)
+def test_unknown_codes_warning_is_quiet_for_real_categoricals(values):
+    pre = _fit(_x(values))
+    assert pre.categorical_columns_ == ["x"]
+    assert pre.warnings_ == []
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("−5", -5.0),
+        ("−3.2%", -3.2),
+        ("USD 100", 100.0),
+        ("usd100", 100.0),
+        ("Rs. 1,250", 1250.0),
+        ("Rs.100", 100.0),
+        ("INR 100", 100.0),
+        ("100 EUR", 100.0),
+        ("-USD 100", -100.0),
+        ("(USD 50)", -50.0),
+        ("1234-", -1234.0),
+        ("1,234.5-", -1234.5),
+    ],
+)
+def test_minus_signs_and_currency_codes_parse(raw, expected):
+    values = ["10", "20", "30", "40", raw]
+    pre = _fit(_x(values))
+    assert pre.numeric_columns_ == ["x"]
+    assert pre.transform({"x": raw})["x"].iloc[0] == pytest.approx(expected)
+
+
+def test_unicode_minus_in_decimal_comma_column():
+    values = ["−12,5", "3,25", "100,1", "7,0", "−8,9"]
+    pre = _fit(_x(values))
+    assert pre.decimal_comma_columns_ == ["x"]
+    assert pre.transform(_x(values))["x"].tolist() == pytest.approx(
+        [-12.5, 3.25, 100.1, 7.0, -8.9]
+    )
+
+
+@pytest.mark.parametrize("values", [["USD", "EUR", "INR"] * 4, ["Lot 100", "Lot 200", "Lot 300"] * 4])
+def test_currency_code_alone_or_other_words_stay_categorical(values):
+    assert _fit(_x(values)).categorical_columns_ == ["x"]
+
+
+def test_infinite_values_are_missing_with_warning():
+    values = ["inf", "inf%", "-inf", "1", "2", "3", "4", "5"]
+    pre = _fit(_x(values))
+    assert pre.numeric_ranges_["x"] == (1.0, 5.0)
+    [warning] = pre.warnings_
+    assert "3 infinite value(s)" in warning
+    out = pre.transform(_x(values))["x"]
+    assert out.iloc[:3].isna().all()
+    assert np.isnan(pre.transform({"x": float("inf")})["x"].iloc[0])
+
+
+def test_train_model_with_infinite_values_succeeds():
+    from glin import engine
+
+    rng = np.random.RandomState(0)
+    x = [f"{v:.2f}%" for v in rng.uniform(0, 100, 120)]
+    x[0], x[1] = "inf%", "-inf"
+    df = pd.DataFrame({"x": x, "y": rng.choice(["a", "b"], 120)})
+    bundle = engine.train_model(df, "y", model_name="inf", hyperparameters={"interactions": 0})
+    assert any("2 infinite value(s)" in w for w in bundle["warnings"])
+    result = engine.explain_record(bundle, {"x": float("inf")})
+    assert [w["issue"] for w in result["warnings"]] == ["unparseable_number"]
+
+
+def test_native_infinite_values_are_missing():
+    pre = _fit(pd.DataFrame({"x": [1.0, 2.0, np.inf, 4.0, -np.inf]}))
+    assert pre.numeric_ranges_["x"] == (1.0, 4.0)
+    assert pre.transform(pd.DataFrame({"x": [np.inf]}))["x"].isna().all()
+
+
+@pytest.mark.parametrize("value", ["abc", "inf", float("inf"), float("-inf")])
+def test_unparseable_number_at_predict_warns(value):
+    import json
+
+    pre = _fit(_x(["10", "20", "30", "40"]))
+    check = pre.check_inputs({"x": value})
+    assert check["missing_features"] == ["x"]
+    assert [w["issue"] for w in check["warnings"]] == ["unparseable_number"]
+    json.dumps(check, allow_nan=False)
+
+
+@pytest.mark.parametrize("value", ["", "  ", None, float("nan"), "SUPP", " z "])
+def test_blank_or_code_at_predict_is_missing_without_warning(value):
+    pre = _fit(_x(["10", "20", "30", "40"]))
+    assert pre.check_inputs({"x": value}) == {"warnings": [], "missing_features": ["x"]}
+
+
+def test_warning_values_are_json_native():
+    import json
+
+    pre = _fit(pd.DataFrame({"x": [1, 2, 3, 4], "c": ["a", "b", "a", "b"]}))
+    check = pre.check_inputs({"x": np.int64(9), "c": np.str_("z")})
+    assert [w["value"] for w in check["warnings"]] == [9, "z"]
+    assert type(check["warnings"][0]["value"]) is int
+    json.dumps(check, allow_nan=False)
 
 
 def test_warning_does_not_fire_on_normal_categoricals():

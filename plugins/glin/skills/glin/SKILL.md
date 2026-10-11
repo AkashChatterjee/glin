@@ -32,7 +32,7 @@ glin handles classification. It cannot do regression. A target must have at leas
 
 Excel files need `glin-ml[excel]`. Pass `sheet` for a workbook with several sheets. Pass `header_rows` (for example `"3-4"`) if the header detection is not clear.
 
-Numeric columns can have codes for missing values. The default codes are `SUPP`, `NE`, `NP` and `z`. If a warning names other codes, confirm with the user. Then pass them in `suppression_codes`.
+Numeric columns can have codes for missing values. The default codes are `SUPP`, `NE`, `NP`, `z`, `*` and `..`. If a warning names other codes, confirm with the user. Then pass them in `suppression_codes`. A warning can also say that codes keep a column from being numeric. Do the same for that warning.
 
 ## Tune a model
 
@@ -55,7 +55,7 @@ Read the audit like this:
 - For a binary target, scores and `base_logit` are log-odds of `score_class`. A positive score pushes toward `score_class`. A negative score pushes toward the other class.
 - For a multiclass target, each term has `score_by_class`.
 - `additivity_verified` must be true. It proves that the scores add up to the model probability.
-- `warnings` lists inputs that the model never saw (`unseen_category`, `out_of_range`, `unparseable_date`). Tell the user that the prediction is less reliable.
+- `warnings` lists inputs that the model never saw (`unseen_category`, `out_of_range`, `unparseable_number`, `unparseable_date`). Tell the user that the prediction is less reliable.
 - `missing_features` lists absent inputs. A missing field is not an average value. Say which fields were missing.
 
 For many rows, call `predict` once for each row. Then rank the rows and give the reason for each.
