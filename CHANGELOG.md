@@ -6,9 +6,22 @@ The numbers in parentheses are GitHub issues.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-18
+
+### Removed
+
+- **Breaking:** the `glin train`, `glin list` and `glin delete` commands. Agents use the MCP tools `train_model`, `list_models` and `delete_model`. `glin serve` and its flags do not change, so the MCP configurations that you have keep working. Version 0.1.4 is the last release with these commands (#76).
+- The `click` dependency, and the `on_progress` argument of `glin.engine.train_model` (#76).
+
 ### Added
 
-- The release workflow publishes to the MCP Registry with GitHub OIDC, and checks that `server.json` and `plugin.json` carry the version of the tag (#74).
+- The `delete_model` MCP tool. It has a destructive annotation and uses the same name checks as `inspect_model` (#76).
+- The release workflow publishes to the MCP Registry with GitHub OIDC. It also checks that `server.json` and `plugin.json` carry the version of the tag, before the upload to PyPI (#74).
+
+### Changed
+
+- Excel error messages name the `train_model` arguments `sheet` and `header_rows`, not the CLI flags (#76).
+- The Claude Code plugin starts `glin-ml[excel]>=0.1.5`, because its skill uses `delete_model` (#76).
 
 ## [0.1.4] - 2026-10-11
 
@@ -68,5 +81,6 @@ The numbers in parentheses are GitHub issues.
 
 Versions 0.1.0 to 0.1.3 have no entries in this file. See the [tags on GitHub](https://github.com/AkashChatterjee/glin/tags).
 
-[Unreleased]: https://github.com/AkashChatterjee/glin/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/AkashChatterjee/glin/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/AkashChatterjee/glin/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/AkashChatterjee/glin/compare/v0.1.3...v0.1.4
