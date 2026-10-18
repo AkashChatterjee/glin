@@ -36,18 +36,6 @@ _NOTE_START = re.compile(r"(sources?|notes?|footnotes?)\b|[*†‡©]", re.IGNOR
 _NOTE_MIN_WORDS = 6
 
 
-@dataclass(frozen=True)
-class OptionNames:
-    """How messages name the Excel options: MCP arguments or CLI flags."""
-
-    sheet: str = "sheet"
-    header_rows: str = "header_rows"
-
-
-MCP_OPTIONS = OptionNames()
-CLI_OPTIONS = OptionNames("--sheet", "--header-rows")
-
-
 @dataclass
 class LoadedTable:
     df: pd.DataFrame
@@ -64,28 +52,23 @@ def load_table(
     path: Union[str, Path],
     sheet: SheetRef = None,
     header_rows: HeaderRows = None,
-    options: OptionNames = MCP_OPTIONS,
 ) -> LoadedTable:
     """Load a table. `.xlsx` / `.xls` go through the Excel reader; anything
-    else is read as a CSV. `sheet` and `header_rows` apply to Excel only.
-    `options` sets how error messages name those two options."""
+    else is read as a CSV. `sheet` and `header_rows` apply to Excel only."""
     path = Path(path)
     if not is_excel_path(path):
         if sheet is not None or header_rows is not None:
             raise ValueError(
-                f"{options.sheet} and {options.header_rows} only apply to "
-                ".xlsx / .xls files"
+                "sheet and header_rows only apply to .xlsx / .xls files"
             )
         return LoadedTable(pd.read_csv(path))
-    return _load_excel(path, sheet, header_rows, options)
+    return _load_excel(path, sheet, header_rows)
 
 
-def parse_header_rows(
-    spec: HeaderRows, options: OptionNames = MCP_OPTIONS
-) -> Optional[list[int]]:
+def parse_header_rows(spec: HeaderRows) -> Optional[list[int]]:
     """Normalise `header_rows` to a sorted list of consecutive 1-based rows.
     Accepts 4, "4", "3-4", "3,4" or [3, 4]."""
-    name = options.header_rows
+    name = "header_rows"
     if spec is None or (isinstance(spec, str) and not spec.strip()):
         return None
     if isinstance(spec, bool):
@@ -136,10 +119,8 @@ def _parse_header_rows_text(text: str, name: str) -> list[int]:
         ) from None
 
 
-def _load_excel(
-    path: Path, sheet: SheetRef, header_rows: HeaderRows, options: OptionNames
-) -> LoadedTable:
-    explicit = parse_header_rows(header_rows, options)
+def _load_excel(path: Path, sheet: SheetRef, header_rows: HeaderRows) -> LoadedTable:
+    explicit = parse_header_rows(header_rows)
     try:
         workbook = pd.ExcelFile(path)
     except ImportError as exc:
@@ -151,12 +132,12 @@ def _load_excel(
             f"{path.suffix.lower()}"
         ) from None
     with workbook:
-        sheet_name = _resolve_sheet(workbook.sheet_names, sheet, options.sheet)
+        sheet_name = _resolve_sheet(workbook.sheet_names, sheet)
         try:
             raw = workbook.parse(sheet_name, header=None, dtype=object)
         except ImportError as exc:
             raise ValueError(_missing_dependency_message(path, exc)) from None
-    return _extract_table(raw, explicit, sheet_name, options)
+    return _extract_table(raw, explicit, sheet_name)
 
 
 def _missing_dependency_message(path: Path, exc: ImportError) -> str:
@@ -169,17 +150,17 @@ def _missing_dependency_message(path: Path, exc: ImportError) -> str:
     )
 
 
-def _resolve_sheet(names: list[str], sheet: SheetRef, option: str) -> str:
+def _resolve_sheet(names: list[str], sheet: SheetRef) -> str:
     listing = "; ".join(f"{i}. {name!r}" for i, name in enumerate(names, 1))
     if sheet is None or (isinstance(sheet, str) and not sheet.strip()):
         if len(names) == 1:
             return names[0]
         raise ValueError(
-            f"workbook has {len(names)} sheets; choose one with {option} (a name "
+            f"workbook has {len(names)} sheets; choose one with sheet (a name "
             f"or 1-based position). Available: {listing}"
         )
     if isinstance(sheet, bool):
-        raise ValueError(f"{option} must be a sheet name or a 1-based position")
+        raise ValueError("sheet must be a sheet name or a 1-based position")
     if isinstance(sheet, int):
         if 1 <= sheet <= len(names):
             return names[sheet - 1]
@@ -193,11 +174,11 @@ def _resolve_sheet(names: list[str], sheet: SheetRef, option: str) -> str:
         matches = ", ".join(repr(n) for n in folded)
         raise ValueError(
             f"sheet name {sheet!r} is ambiguous: it matches {matches} when case and "
-            f"outer spaces are ignored. Give {option} the exact name or a 1-based "
+            f"outer spaces are ignored. Give sheet the exact name or a 1-based "
             f"position. Available: {listing}"
         )
     if sheet.strip().isdigit():
-        return _resolve_sheet(names, int(sheet), option)
+        return _resolve_sheet(names, int(sheet))
     raise ValueError(f"no sheet named {sheet!r}. Available: {listing}")
 
 
@@ -228,7 +209,6 @@ def _extract_table(
     raw: pd.DataFrame,
     explicit: Optional[list[int]],
     sheet_name: str,
-    options: OptionNames,
 ) -> LoadedTable:
     cells = _clean_cells(raw)
     counts = cells.notna().sum(axis=1)
@@ -236,10 +216,10 @@ def _extract_table(
         raise ValueError(f"sheet {sheet_name!r} is empty")
 
     if explicit is None:
-        explicit = [_detect_header_row(cells, counts, sheet_name, options) + 1]
+        explicit = [_detect_header_row(cells, counts, sheet_name) + 1]
     elif explicit[-1] > len(cells):
         raise ValueError(
-            f"{options.header_rows} {explicit} is beyond the last row ({len(cells)}) of "
+            f"header_rows {explicit} is beyond the last row ({len(cells)}) of "
             f"sheet {sheet_name!r}"
         )
 
@@ -293,9 +273,7 @@ def _is_footnote(row: pd.Series) -> bool:
     return bool(_NOTE_START.match(first)) or len(first.split()) >= _NOTE_MIN_WORDS
 
 
-def _detect_header_row(
-    cells: pd.DataFrame, counts: pd.Series, sheet_name: str, options: OptionNames
-) -> int:
+def _detect_header_row(cells: pd.DataFrame, counts: pd.Series, sheet_name: str) -> int:
     """0-based index of the single header row, or ValueError when unclear."""
     window = counts.iloc[:_HEADER_SCAN_ROWS]
     populated = counts[counts > 0]
@@ -303,7 +281,7 @@ def _detect_header_row(
     width = int(modal[modal == modal.max()].index.max())
     threshold = max(2, math.ceil(_HEADER_FILL_RATIO * width))
     hint = (
-        f"Set {options.header_rows} to the header row number or a range such as "
+        "Set header_rows to the header row number or a range such as "
         "'3-4' (1-based, as numbered in Excel)."
     )
 

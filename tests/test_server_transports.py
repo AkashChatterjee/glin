@@ -59,6 +59,7 @@ async def test_all_tools_registered(models_root):
         "train_model",
         "list_hyperparameters",
         "explain_model",
+        "delete_model",
     }
 
 
@@ -399,6 +400,7 @@ async def test_stdio_real_mcp_client_round_trip(models_root):
                 "train_model",
                 "list_hyperparameters",
                 "explain_model",
+                "delete_model",
             }
 
             result = await session.call_tool(
@@ -456,7 +458,7 @@ def test_run_stdio_quiets_interpret_logging(monkeypatch, tmp_path):
 
 def test_all_tools_have_annotations(tmp_path):
     tools = asyncio.run(server.build_server(models_root=tmp_path).list_tools())
-    assert len(tools) == 6
+    assert len(tools) == 7
     for tool in tools:
         assert tool.annotations is not None, tool.name
         assert tool.annotations.title, tool.name
@@ -465,8 +467,11 @@ def test_all_tools_have_annotations(tmp_path):
     by_name = {t.name: t.annotations for t in tools}
     assert _hint(by_name["train_model"], "readOnlyHint") is False
     assert _hint(by_name["train_model"], "destructiveHint") is True
+    assert by_name["delete_model"].title == "Delete Model"
+    assert _hint(by_name["delete_model"], "readOnlyHint") is False
+    assert _hint(by_name["delete_model"], "destructiveHint") is True
     for name, ann in by_name.items():
-        if name != "train_model":
+        if name not in ("train_model", "delete_model"):
             assert _hint(ann, "readOnlyHint") is True and _hint(ann, "destructiveHint") is False
 
 

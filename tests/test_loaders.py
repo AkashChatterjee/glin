@@ -235,14 +235,6 @@ def test_sheet_name_that_matches_several_sheets_is_ambiguous(tmp_path):
     assert load_table(path, sheet="Data").sheet == "Data"
 
 
-def test_cli_option_names_in_messages(tmp_path, two_sheets):
-    with pytest.raises(ValueError, match="--sheet") as exc:
-        load_table(two_sheets, options=loaders.CLI_OPTIONS)
-    assert "sheet=" not in str(exc.value)
-    with pytest.raises(ValueError, match="--header-rows"):
-        load_table(two_sheets, sheet=2, header_rows="x", options=loaders.CLI_OPTIONS)
-
-
 def test_csv_is_unchanged_and_rejects_excel_options(tmp_path):
     path = tmp_path / "d.csv"
     path.write_text("a,b\n1,2\n3,4\n")
