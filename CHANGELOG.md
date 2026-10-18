@@ -6,6 +6,10 @@ The numbers in parentheses are GitHub issues.
 
 ## [Unreleased]
 
+### Added
+
+- The release workflow publishes to the MCP Registry with GitHub OIDC, and checks that `server.json` and `plugin.json` carry the version of the tag (#74).
+
 ## [0.1.4] - 2026-10-11
 
 ### Removed

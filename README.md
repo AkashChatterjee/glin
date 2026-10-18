@@ -426,9 +426,15 @@ The owner does these steps for each release:
 2. Set the release version in `server.json` (`version` and `packages[0].version`) and in `plugins/glin/.claude-plugin/plugin.json` (`version`). If the plugin needs the new release, also change the minimum version in `plugins/glin/.mcp.json`. Merge these changes into `main`.
 3. Tag the release and push the tag, for example `git tag v0.1.4` and `git push origin v0.1.4`.
 4. In GitHub Actions, open the `Publish to PyPI` run and approve the `pypi` environment. The upload step starts only after this approval.
-5. The workflow publishes to PyPI. Then it creates the GitHub Release with the `CHANGELOG.md` section of the version as the notes. If `CHANGELOG.md` has no section for the version, the workflow stops before it publishes.
+5. The workflow stops at the start if `CHANGELOG.md` has no section for the version, or if `server.json` or `plugin.json` has a different version than the tag. If all is correct, it publishes to PyPI. Then it creates the GitHub Release with the `CHANGELOG.md` section of the version as the notes. Also, the `mcp-registry` job publishes to the MCP Registry (see [Publishing to the MCP Registry](#publishing-to-the-mcp-registry)).
 6. Check that the new version is on PyPI and that the GitHub Release exists.
-7. Publish to the MCP Registry with `mcp-publisher login github` and `mcp-publisher publish`. See [Publishing to the MCP Registry](#publishing-to-the-mcp-registry).
+7. Check the listing in the MCP Registry. The new version must show `isLatest: true`:
+
+```bash
+curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.AkashChatterjee/glin"
+```
+
+If the `mcp-registry` job fails, use the manual fallback in [Publishing to the MCP Registry](#publishing-to-the-mcp-registry).
 
 To compare the changelog with the merged pull requests, open a draft release on GitHub and click "Generate release notes". [`.github/release.yml`](https://github.com/AkashChatterjee/glin/blob/main/.github/release.yml) groups the pull requests by label.
 
@@ -443,20 +449,28 @@ The workflow publishes through PyPI [trusted publishing](https://docs.pypi.org/t
 
 ### Publishing to the MCP Registry
 
-The registry holds metadata only. It checks that the PyPI package has the line `mcp-name: io.github.AkashChatterjee/glin` in its README. The README has this line as a hidden comment. Publish to PyPI first, then to the registry:
+The registry holds metadata only. It checks that the PyPI package has the line `mcp-name: io.github.AkashChatterjee/glin` in its README. The README has this line as a hidden comment.
 
-1. Release the new version on PyPI (see above).
-2. Check that `version` and `packages[0].version` in `server.json` are the released version.
-3. Run these commands from the repository root:
+The `mcp-registry` job in `publish.yml` publishes to the registry. It runs after the `publish` job, so the version is on PyPI first. The job does these steps:
+
+1. It checks that `version` and `packages[0].version` in `server.json`, and `version` in `plugins/glin/.claude-plugin/plugin.json`, equal the tag without the `v`. The `build` job does the same check, so a mismatch stops the run before the upload to PyPI. The check is in `.github/scripts/check-versions.sh`.
+2. It downloads a pinned release of `mcp-publisher` (Linux, amd64) and checks its SHA-256. The version is in `MCP_PUBLISHER_VERSION` in `publish.yml`. When you change it, also change `MCP_PUBLISHER_SHA256` to the value in the `registry_<version>_checksums.txt` file of that release.
+3. It logs in with `mcp-publisher login github-oidc`. The job has the `id-token: write` permission. No secret or token is stored in GitHub.
+4. It runs `mcp-publisher publish`. The PyPI CDN can lag for a minute or more after an upload, and the registry then cannot see the new version. If the command fails, the job waits 60 seconds and tries again, up to 5 tries in total.
+5. It queries the registry and fails if the version of the tag is not listed with `isLatest: true`.
+
+The registry rejects a version that already exists. If the job fails after the registry accepted the version, do not run it again. Check the listing instead.
+
+#### Manual fallback
+
+If the job cannot publish, set the versions in `server.json` and run these commands from the repository root, after the version is on PyPI:
 
 ```bash
 mcp-publisher login github
 mcp-publisher publish
 ```
 
-4. Check the result: `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.AkashChatterjee/glin"`.
-
-The registry rejects a version that already exists. Update `server.json` for each release.
+Then check the listing with the `curl` command in the release steps.
 
 ### Checking a release
 
