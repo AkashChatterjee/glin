@@ -36,7 +36,7 @@ See [Example: ask Claude directly](#example-ask-claude-directly) for a full conv
 - [Train a model](#train-a-model)
   - [Model names](#model-names)
   - [Excel input](#excel-input-xlsx--xls)
-  - [Command line helpers (optional)](#command-line-helpers-optional)
+  - [Delete a model](#delete-a-model)
 - [Tools exposed over MCP](#tools-exposed-over-mcp)
 - [Prompts exposed over MCP](#prompts-exposed-over-mcp)
 - [Restricting `csv_path`](#restricting-csv_path)
@@ -52,6 +52,9 @@ See [Example: ask Claude directly](#example-ask-claude-directly) for a full conv
   - [Target column requirements](#target-column-requirements)
 - [Releasing (maintainers)](#releasing-maintainers)
   - [Release steps](#release-steps)
+  - [One-time setup that makes this the only path](#one-time-setup-that-makes-this-the-only-path)
+  - [Publishing to the MCP Registry](#publishing-to-the-mcp-registry)
+  - [Checking a release](#checking-a-release)
 
 ## Install
 
@@ -129,61 +132,44 @@ glin saves each model in `~/.glin/models/<name>/`.
 
 ### Model names
 
-When you make a model (`model_name` in `train_model`, or `glin train --name`), the name must obey this rule:
+When you make a model (`model_name` in `train_model`), the name must obey this rule:
 
 - Use 1 to 64 characters.
 - Use only letters, digits, `-`, `_` and `.`.
 - Do not start the name with `.`. Thus `.`, `..` and hidden names are not valid.
 - Do not use `/` or `\`. Thus a path or an absolute path is not valid.
 
-When you use or delete a model (`inspect_model`, `predict`, `explain_model`, `glin delete`), the name must be one folder name in the models folder. It must not contain `/` or `\`, and it must not be empty, `.` or `..`. Thus you can still use models that an earlier glin version saved with other names, for example a name with a space.
+When you use or delete a model (`inspect_model`, `predict`, `explain_model`, `delete_model`), the name must be one folder name in the models folder. It must not contain `/` or `\`, and it must not be empty, `.` or `..`. Thus you can still use models that an earlier glin version saved with other names, for example a name with a space.
 
 glin rejects a name that does not obey the applicable rule. The error message gives the rule. glin also makes sure that the model folder is directly in the models folder, also when a symbolic link is in the path. Thus a model name cannot write, read or delete files outside the models folder.
 
 ### Excel input (`.xlsx` / `.xls`)
 
-Spreadsheets from governments and analysts train directly. This includes banner rows and merged headers. Excel support is an optional extra, so the base install stays small. `openpyxl` reads `.xlsx` files. `xlrd` reads old `.xls` files. The Claude Code plugin includes the extra. For other clients, use `glin-ml[excel]` in the server command (see [Other MCP clients](#other-mcp-clients)).
+glin trains directly on spreadsheets that have title rows and merged headers, for example government tables. Excel support is an optional extra, so the base install stays small. `openpyxl` reads `.xlsx` files. `xlrd` reads old `.xls` files. The Claude Code plugin includes the extra. For other clients, use `glin-ml[excel]` in the server command (see [Other MCP clients](#other-mcp-clients)).
 
 Ask the agent in plain language, for example:
 
 > "Train a classifier on `~/data/report.xlsx`, sheet `Data 2023`, header rows 3-4, that predicts `outcome`."
 
-The agent passes `sheet` and `header_rows` to `train_model`. The rules below apply to both. The flags `--sheet` and `--header-rows` are the command line forms of these arguments:
+The agent passes `sheet` and `header_rows` to `train_model`. These rules apply:
 
-```bash
-glin train report.xlsx --target outcome --name report_v1                   # one sheet
-glin train report.xlsx --sheet "Data 2023" --target outcome --name r_v1    # name, or 1-based position
-glin train report.xlsx --sheet 2 --header-rows 3-4 --target outcome --name r_v1
-```
-
-- **Sheet:** `--sheet` takes a name or a 1-based position. A workbook with one sheet needs no flag. A workbook with several sheets and no `--sheet` gives an error that lists the sheets. glin ignores case and spaces at the start and end of a name only if one sheet matches. If two or more sheets match (for example `Data` and `data `), glin gives an error that lists them. Then use the exact name or the position.
-- **Header detection:** Without `--header-rows`, glin finds the first row that is mostly filled and looks like labels. It skips title rows above it. If the choice is not clear, glin stops with an error. The error names the rows and asks for `--header-rows`. glin does not guess. Two cases are not clear. In the first, a sparse group-label row sits next to the header row. In the second, the first full row looks like data.
-- **Footnotes:** glin drops footnote rows at the end of the sheet. A footnote row has text in half of the columns or fewer, and no numbers. Its first filled cell starts with `Source`, `Note`, `Footnote`, `*`, `†`, `‡` or `©`, or it is a sentence of six words or more. glin does the same for all column counts. A sparse last row that does not look like a note stays as data. glin gives a warning with the sheet row numbers of the rows that it dropped.
-- **`--header-rows`:** Use 1-based row numbers as shown in Excel: `4`, `3-4` or `3,4`. glin joins a multi-row header into one name for each column with ` - `, for example `2023 - sales`. A blank cell in an upper header row continues the label from the cell on its left (merged group headers). glin drops blanks and repeated parts. Duplicate names get the suffixes `_2` and `_3`. A header cell that holds a date becomes an ISO date, for example `2024-01-01`. Data starts below the last header row. glin prints the sheet, the header rows and the number of rows it read.
+- **Sheet:** `sheet` takes a name or a 1-based position. A workbook with one sheet needs no `sheet`. A workbook with several sheets and no `sheet` gives an error that lists the sheets. glin ignores case and spaces at the start and end of a name only if one sheet matches. If two or more sheets match (for example `Data` and `data `), glin gives an error that lists them. Then use the exact name or the position.
+- **Header detection:** Without `header_rows`, glin finds the first row that is mostly filled and looks like labels. It skips title rows above it. If the choice is not clear, glin stops with an error. The error names the rows and asks for `header_rows`. glin does not guess. Two cases are not clear. In the first, a sparse group-label row sits next to the header row. In the second, the first full row looks like data.
+- **Footnotes:** glin drops footnote rows at the end of the sheet. A footnote row has text in half of the columns or fewer, and no numbers. Its first filled cell starts with `Source`, `Note`, `Footnote`, `*`, `†`, `‡` or `©`, or it is a sentence of six words or more. A sparse last row that does not look like a note stays as data. glin gives a warning with the sheet row numbers of the rows that it dropped.
+- **`header_rows`:** Use 1-based row numbers as shown in Excel: `4`, `"3-4"`, `"3,4"` or `[3, 4]`. glin joins a multi-row header into one name for each column with ` - `, for example `2023 - sales`. A blank cell in an upper header row continues the label from the cell on its left (merged group headers). glin drops blanks and repeated parts. Duplicate names get the suffixes `_2` and `_3`. A header cell that holds a date becomes an ISO date, for example `2024-01-01`. Data starts below the last header row. The result shows the sheet, the header rows and the number of rows that glin read (`rows_read`).
 - **Formulas:** glin uses the cached results of the cells. A spreadsheet app must calculate and save the formulas first.
 - **Empty rows and columns:** glin drops fully empty rows and columns.
-- **CSV files:** CSV behavior does not change. `--sheet` and `--header-rows` are errors for CSV files.
+- **CSV files:** CSV behavior does not change. `sheet` and `header_rows` are errors for CSV files.
 
-### Command line helpers (optional)
+### Delete a model
 
-The `glin` program is mainly the MCP server (`glin serve`). It also has small helpers for a terminal. You do not need them to use glin. They are useful for scripts, and for checks outside an agent. Install glin first (`uv tool install glin-ml`).
+Ask the agent, for example: "Delete the model `churn_v1`." The agent calls `delete_model`. The deletion is permanent. To replace a model with a new one, train it again with `overwrite=True`. You can also remove the folder in `~/.glin/models/` yourself.
 
-The agent can list models (`list_models`). It has no tool to delete a model. To delete one, use `glin delete` or remove the folder in `~/.glin/models/`.
-
-```bash
-glin --help
-glin --version
-glin train path/to/data.csv --target churn --name churn_v1
-glin list
-glin delete churn_v1        # asks for confirmation
-glin delete churn_v1 --yes  # skips the question
-```
-
-During training, `glin train` prints a live line that shows the boosting progress. To stop this line, add `--quiet`. The stage messages still print. `glin train` trains on every row with the default hyperparameters, and it has no holdout.
+The `glin` program only starts the MCP server (`glin serve`). It has no commands to train, list or delete models. Version 0.1.4 is the last release that had them.
 
 ## Tools exposed over MCP
 
-Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All tools are read-only except `train_model`. `train_model` is marked destructive because `overwrite=True` replaces a model. A client can approve the read-only tools automatically and ask before it runs `train_model`.
+Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All tools are read-only except `train_model` and `delete_model`. These two tools are marked destructive: `train_model` with `overwrite=True` replaces a model, and `delete_model` removes one. A client can approve the read-only tools automatically and ask before it runs `train_model` or `delete_model`.
 
 - `list_models()` lists all trained models.
 - `inspect_model(model_name)` returns the feature schema and the target classes. It lists date columns under `features.date`. Each date column shows its derived terms and the `start_date` that `days_since_start` counts from.
@@ -211,6 +197,7 @@ Every tool has MCP annotations (title, `readOnlyHint`, `destructiveHint`). All t
   - the top terms, including pairwise interactions, with their share of the total;
   - for binary targets, a shape for each feature that shows which categories or value ranges push toward which class. For a continuous feature, the shape gives the value range (bin edges, in the units of the feature) where the curve is highest and lowest. The edges have 4 significant digits. Values below 10,000,000 do not use exponent notation (for example `21140`, not `2.114e+04`).
 - `list_hyperparameters()` lists every EBM hyperparameter. Each entry has its type, default, allowed range and a note on what a higher or lower value does.
+- `delete_model(model_name)` permanently deletes a trained model and its folder. It uses the same name rules as `inspect_model` (see [Model names](#model-names)). If the model does not exist, the call fails with a "not found" error. The result has `model_name`, `deleted` and `path`.
 
 ## Prompts exposed over MCP
 
@@ -289,7 +276,7 @@ The `tune_model_hyperparameters` prompt guides the agent through this loop:
 3. Check the seed noise.
 4. Refit on all rows with `holdout_fraction=0`.
 
-Trials must use a scratch `model_name` with `overwrite=True`. `glin train` on the command line trains on every row with the default hyperparameters.
+Trials must use a scratch `model_name` with `overwrite=True`.
 
 ### Grouped holdout
 
@@ -298,7 +285,7 @@ Rows from the same state, region, customer, site or user look alike. A random ho
 Pass `holdout_group_column="state"` (or any other column) to `train_model`. glin then holds out whole groups until about `holdout_fraction` of the rows are in the holdout. The other rows train the model.
 
 - The split uses a seed that does not depend on `random_state`, so every trial uses the same rows. glin tries 25 seeded group orders. It keeps the order whose holdout class shares are closest to the overall class shares.
-- The group column stays a normal feature. A held-out group therefore takes the unseen-category path at prediction time. glin fits the preprocessing on the training rows only.
+- The group column stays a normal feature. At prediction time, a held-out group is therefore an unseen category. glin fits the preprocessing on the training rows only.
 - glin groups text values in the same way as the preprocessor: it removes spaces at the start and end and changes letters to lowercase. Thus `"S06"` and `"s06 "` are one group, and that group is on one side of the split only. Blank text, `nan` and `none` are missing values. If two or more spellings become one group, glin returns a warning.
 - `evaluation` also reports `holdout_group_column`, `holdout_groups` and `train_groups`. These counts use the normalised groups. Missing values count as one group. glin also saves the column name in the model metadata.
 - glin rejects these cases with a clear error:
@@ -310,7 +297,6 @@ Pass `holdout_group_column="state"` (or any other column) to `train_model`. glin
 
   If `holdout_fraction=0`, glin ignores the column and returns a warning.
 - The `build_classifier` and `tune_model_hyperparameters` prompts tell the agent to use this option when such a column exists. They also tell the agent to report this holdout as the honest estimate.
-- `glin train` has no holdout, so it has no equivalent.
 
 ## Example: ask Claude directly
 
@@ -342,7 +328,7 @@ An earlier study, [Child stunting across Indian districts (NFHS-5)](https://akas
 
 ## Data requirements
 
-`glin train` checks your data before it does any work. The data is a CSV, or a sheet of an Excel workbook after header detection. A hard problem stops training with a clear error. An example is a target column with only one class. A soft problem prints a warning, and training continues. An example is a numeric target with many distinct values.
+`train_model` checks your data before it does any work. The data is a CSV, or a sheet of an Excel workbook after header detection. A hard problem stops training with a clear error. An example is a target column with only one class. A soft problem gives a warning, and training continues. An example is a numeric target with many distinct values.
 
 The rules are in `glin/validation.py` as a flat list. To support a new data shape, add one rule and one preprocessing case. The rest of the pipeline does not change.
 
@@ -352,14 +338,14 @@ In the Python API, a DataFrame can have column names that are not text, for exam
 
 | Data shape | What happens |
 |---|---|
-| Numeric (int, float), including `NaN` | glin passes the values through. EBM puts missing values in their own bin. glin keeps a column with almost all distinct values if a value repeats or the values have decimals, for example rupee amounts. glin also keeps unique whole numbers with large, uneven gaps, for example salaries or epoch seconds. It drops a column of all-distinct whole numbers as an identifier only if the values fill a range, for example a row index or a shuffled `1..N`, or if the column name looks like an ID. See "Row identifiers" below. |
+| Numeric (int, float), including `NaN` | glin passes the values through. EBM puts missing values in their own bin. glin keeps a column with almost all distinct values if a value repeats or the values have decimals, for example rupee amounts. glin also keeps unique whole numbers with large, uneven gaps, for example salaries. For the columns that glin drops as identifiers, see "Row identifiers" below. |
 | Dirty numeric strings (blanks, for example `" "` for the total charges of a new customer) | glin converts the column to `float64` if at least 80% of the non-null values parse as numbers. Cells that do not parse become `NaN`. |
 | Categorical strings, up to 250 unique values | glin lowercases and strips the text. EBM bins each category. Missing and unseen values map to a `__missing__` marker. |
-| Currency and thousands-separated strings (`$1,234.56`, `£1,234`, `€1.234,56`, `USD 100`, `Rs. 100`, `100 EUR`) | glin removes currency symbols, spaces and common currency codes (`USD`, `EUR`, `GBP`, `INR`, `Rs.` and others) before or after the number. Then it converts the column as above. glin reads a decimal comma only when the column has clear European values (`1.234,56`, `12,5`, `1.234.567`). A plain `1,234` is a thousands group. glin uses the same rule in training ranges, in `check_inputs` and at predict time. glin does not change native numbers (int, float). A value with both separators has a clear format: glin uses the last separator as the decimal mark. Thus `1,500.50` and `1.500,50` both become 1500.5 in all columns. In a European column, `1500.5` is 1500.5, but `1.500` is 1500. A column that mixes both styles is parsed as US style, and glin returns a warning. In that column, a European value with only a comma, such as `12,5`, becomes 125. |
+| Currency and thousands-separated strings (`$1,234.56`, `£1,234`, `€1.234,56`, `USD 100`, `Rs. 100`, `100 EUR`) | glin removes currency symbols, spaces and common currency codes (`USD`, `EUR`, `GBP`, `INR`, `Rs.` and others) before or after the number. Then it converts the column as above. glin reads a decimal comma only when the column has clear European values (`1.234,56`, `12,5`, `1.234.567`). A plain `1,234` is a thousands group. The same rules apply at predict time. glin does not change native numbers (int, float). In a value with both separators, glin uses the last separator as the decimal mark. Thus `1,500.50` and `1.500,50` both become 1500.5. In a European column, `1500.5` is 1500.5, but `1.500` is 1500. A column that mixes both styles is parsed as US style, and glin returns a warning. In that column, a European value with only a comma, such as `12,5`, becomes 125. |
 | Negative numbers (`-5`, `−5`, `(1,234)`, `1234-`) | glin reads the Unicode minus sign (`−`, common in UK tables), brackets and a trailing minus (common in accounting exports) as a negative sign. |
 | Infinity (`inf`, `-inf`, `inf%`, a float `inf`) | glin treats infinity as missing (`NaN`). `train_model` returns a warning that gives the number of infinite values. At predict time, an infinite input gives `unparseable_number`. |
 | Percent strings (`44.98%`, `12 %`, `(5%)`) | glin removes the trailing `%` before it converts the value. The value stays in percentage points: `44.98%` becomes `44.98`, not `0.4498`. This works together with the currency rules. `50%` and `50` in one column give the same value. |
-| Suppression codes in numeric columns (`SUPP`, `NE`, `NP`, `z`, `*`, `..`) | glin treats these codes as missing (`NaN`). It ignores them when it decides if a column is numeric, so the column stays numeric. Matching ignores case and surrounding spaces. To change the set, use `EBMTabularPreprocessor(suppression_codes=[...])` or `train_model(suppression_codes=[...])`. A list replaces the default. Categorical columns do not change, so `NE` as a region stays a category. A numeric column can also have a few short, repeated non-numeric values that are not in the set, for example `x` or `c`. glin still treats them as missing. `train_model` then returns a warning that suggests the `suppression_codes` to confirm. Unknown codes can also stop a column from being numeric: if they make up more than 20% of the values, the column is a category. If at least half of the values are numbers, `train_model` returns a warning that names the codes and suggests the `suppression_codes` that make the column numeric. glin does not add `<5` or `—` to the default set, because they can be real values: `<5` is a value below 5, and `—` is often zero in financial tables. |
+| Suppression codes in numeric columns (`SUPP`, `NE`, `NP`, `z`, `*`, `..`) | glin treats these codes as missing (`NaN`). It ignores them when it decides if a column is numeric, so the column stays numeric. Matching ignores case and surrounding spaces. To change the set, use `EBMTabularPreprocessor(suppression_codes=[...])` or `train_model(suppression_codes=[...])`. A list replaces the default. Categorical columns do not change, so `NE` as a region stays a category. glin also treats a few short, repeated values that are not in the set (for example `x` or `c`) as missing. `train_model` then returns a warning that suggests the `suppression_codes` to confirm. If unknown codes are more than 20% of the values, the column becomes a category. If at least half of the values are numbers, `train_model` returns a warning that suggests the `suppression_codes` that make the column numeric. `<5` and `—` are not in the default set, because they can be real values: `<5` is a value below 5, and `—` is often zero in financial tables. |
 | Boolean columns | glin treats them as a 0/1 continuous numeric feature. |
 | Dates and timestamps | glin detects them and splits them into named terms. See [Dates and timestamps](#dates-and-timestamps). |
 
@@ -385,12 +371,12 @@ These strings work: `2024-03-06`, `2024-03-06 14:30:00`, `2024-03-06T14:30:00Z`,
 | Dates stored as bare numbers (year, `YYYYMMDD`, epoch seconds) | glin treats them as ordinary numbers, not dates. | glin cannot tell a plain integer column from an ID or a count. Convert the column to date strings if it holds dates. |
 | Free text | glin drops the column if it has more than 250 unique values. Below that limit, the text becomes a set of categories that almost certainly have no use. | glin does not do natural language processing. A text column is not a set of classes. |
 | Lists, dicts or nested JSON in a cell | glin does not parse them. It treats the cell as an opaque string. | No structured extraction exists. |
-| Row identifiers (sequential IDs, UUIDs, hashes) | glin drops them on purpose. This is not a gap. glin checks them only above 50 rows. A numeric column is an identifier only if it is more than 95% unique, every value is a whole number, no value repeats, and one of these is true: the values fill at least 20% of the range from the minimum to the maximum (with a constant step, for example `10, 20, 30`), or the column name has an ID word (`id`, `idx`, `key`, `uuid`, `guid`, `pk`, for example `row_id` or `PassengerId`, or the full name `index`). glin uses the same rule on a text column with mostly numeric values, for example IDs with one `TBD` value. glin also drops other text columns that are more than 95% unique. | IDs carry no predictive signal. |
+| Row identifiers (sequential IDs, UUIDs, hashes) | glin drops them on purpose. This is not a gap. glin checks only data with more than 50 rows. A numeric column is an identifier if all of its values are distinct whole numbers and one more condition is true:<br>- the values fill at least 20% of the range from the minimum to the maximum (also with a constant step, for example `10, 20, 30`), or<br>- the column name has an ID word: `id`, `idx`, `key`, `uuid`, `guid` or `pk` (for example `row_id` or `PassengerId`), or the name is `index`.<br>The same rule applies to a text column with mostly numeric values, for example IDs with one `TBD` value. glin also drops other text columns that are more than 95% unique. | IDs carry no predictive signal. |
 | Any dropped column (constant, identifier-like, more than 250 categories, or a date with no varying part) | `features_dropped` lists the column. `train_model` also returns a `warnings` entry with the column name and the reason. For numeric identifiers, the entry suggests that you round or bin the column if it is a real measurement. | A drop is never silent. |
 
 ### Target leakage check
 
-After preprocessing, `train_model` and `glin train` look for single feature columns that separate the target almost perfectly on their own. This is the usual sign that someone derived the target from that column with a threshold, a band or a category mapping. The model then only reads the target back.
+After preprocessing, `train_model` looks for single feature columns that separate the target almost perfectly on their own. This is the usual sign that someone derived the target from that column with a threshold, a band or a category mapping. The model then only reads the target back.
 
 glin flags such a column in `warnings` as `Possible target leakage: ...`. The warning shows the evidence: a numeric threshold or band such as `> 62.5 -> 'yes'`, or a category mapping such as `{p, q} -> 'ok'`. It suggests that you drop the column and retrain if the column is not known at prediction time. The check is only a warning. Training continues. The Python result also has `leakage_suspects`. The `build_classifier`, `prepare_csv_for_training` and tuning prompts tell the agent to review these warnings with the user.
 
@@ -409,7 +395,7 @@ glin flags such a column in `warnings` as `Possible target leakage: ...`. The wa
 
 - The target needs at least 2 distinct non-null values (binary or multiclass). A single-class target is a hard error.
 - glin drops rows with a missing target value and returns a warning. The other rows are not affected.
-- A numeric target with more than 20 distinct values triggers a warning that it looks like a regression target. glin trains classifiers, not regressors, so each value would become its own unrelated class. Band the target into a few classes (quantiles or domain thresholds), or pick another target.
+- A numeric target with more than 20 distinct values triggers a warning that it looks like a regression target. glin trains classifiers, not regressors, so each value becomes a separate class. Band the target into a few classes (quantiles or domain thresholds), or pick another target.
 - A numeric target with 3 to 20 distinct values (for example a score or an ordinal level) triggers a warning. The multiclass model ignores the order of the values. The warning gives an example with the real values of the target. Use fewer bands or a binary threshold. The `prepare_csv_for_training` and `build_classifier` prompts give the same guidance.
 - These two checks also apply to a text target whose values are numbers, for example `"85%"` or `"1"` to `"5"`. glin parses the values with the same rules as a numeric feature column. The model still uses each text value as a class.
 - A text target with more than 20 distinct values triggers a warning. Each value becomes its own class, and each class needs many rows.
@@ -477,6 +463,8 @@ The registry rejects a version that already exists. Update `server.json` for eac
 To check a build without publishing it, run `uv build` locally and inspect `dist/`. Never upload it. After a release, confirm that the public package works with a clean install:
 
 ```bash
-uv tool install glin-ml
-glin train some.csv --target y --name smoke_check
+uvx --refresh --from glin-ml glin --version
+uvx --from glin-ml glin serve --help
 ```
+
+The first command must show the released version. Then start the server from an MCP client, ask the agent to train a small model, and delete it with `delete_model`.

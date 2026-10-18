@@ -5,6 +5,7 @@ import functools
 import inspect
 import io
 import logging
+import shutil
 import sys
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -131,6 +132,14 @@ _TRAIN_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=True,
     idempotentHint=False,
+    openWorldHint=False,
+)
+
+_DELETE_ANNOTATIONS = ToolAnnotations(
+    title="Delete Model",
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
     openWorldHint=False,
 )
 
@@ -383,6 +392,18 @@ def build_server(
             result["sheet"] = source.sheet
             result["header_rows"] = source.header_rows
         return result
+
+    @tool(annotations=_DELETE_ANNOTATIONS)
+    def delete_model(model_name: str) -> dict[str, Any]:
+        """Permanently delete a trained model and its saved files. This cannot
+        be undone; confirm with the user before you call it. To replace a
+        model with a new one, call `train_model` with overwrite=True instead."""
+        model_dir = _model_dir(model_name)
+        if model_dir.is_symlink():
+            model_dir.unlink()
+        else:
+            shutil.rmtree(model_dir)
+        return {"model_name": model_name, "deleted": True, "path": str(model_dir)}
 
     @mcp.prompt()
     def build_classifier(

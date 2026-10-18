@@ -17,6 +17,7 @@ glin handles classification. It cannot do regression. A target must have at leas
 - `explain_model(model_name, top_n=15, include_shapes=True)` shows what the model learned.
 - `list_hyperparameters()` lists the tuning settings with defaults and ranges.
 - `train_model(target_column, model_name, csv_path=..., ...)` trains or retrains a model.
+- `delete_model(model_name)` deletes a model permanently. Ask the user to confirm before you call it.
 
 ## Build a model
 

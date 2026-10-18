@@ -1,13 +1,13 @@
 import numpy as np
 import pandas as pd
 import pytest
-from click.testing import CliRunner
 
 import glin
-from glin import cli, engine
+from glin import cli, engine, server
+from tests.mcp_compat import call_structured
 
 
-def _train_fixture_model(models_root, model_name="cli_test_model"):
+def _train_fixture_model(models_root, model_name="test_model"):
     rng = np.random.RandomState(0)
     n = 100
     df = pd.DataFrame(
@@ -21,53 +21,31 @@ def _train_fixture_model(models_root, model_name="cli_test_model"):
     engine.save_bundle(bundle, models_root)
 
 
-def test_delete_removes_model_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path)
+@pytest.mark.asyncio
+async def test_delete_model_removes_model_directory(tmp_path):
     _train_fixture_model(tmp_path)
-    assert (tmp_path / "cli_test_model").exists()
+    _train_fixture_model(tmp_path, "other")
+    mcp = server.build_server(models_root=tmp_path)
 
-    runner = CliRunner()
-    result = runner.invoke(cli.main, ["delete", "cli_test_model", "--yes"])
+    result = await call_structured(mcp, "delete_model", {"model_name": "test_model"})
 
-    assert result.exit_code == 0
-    assert "Deleted model 'cli_test_model'" in result.output
-    assert not (tmp_path / "cli_test_model").exists()
-
-
-def test_delete_unknown_model_errors(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path)
-
-    runner = CliRunner()
-    result = runner.invoke(cli.main, ["delete", "does_not_exist", "--yes"])
-
-    assert result.exit_code != 0
-    assert "not found" in result.output
+    assert result["deleted"] is True
+    assert result["model_name"] == "test_model"
+    assert not (tmp_path / "test_model").exists()
+    assert (tmp_path / "other").exists()
+    listed = await mcp.call_tool("list_models", {})
+    assert "test_model" not in str(listed)
 
 
-def test_delete_without_yes_prompts_and_aborts_on_no(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path)
-    _train_fixture_model(tmp_path)
-
-    runner = CliRunner()
-    result = runner.invoke(cli.main, ["delete", "cli_test_model"], input="n\n")
-
-    assert result.exit_code != 0
-    assert (tmp_path / "cli_test_model").exists()  # not deleted
+@pytest.mark.asyncio
+async def test_delete_model_unknown_model_errors(tmp_path):
+    mcp = server.build_server(models_root=tmp_path)
+    with pytest.raises(server.ToolError, match="model 'does_not_exist' not found"):
+        await mcp.call_tool("delete_model", {"model_name": "does_not_exist"})
 
 
-def test_delete_without_yes_prompts_and_confirms_on_yes(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path)
-    _train_fixture_model(tmp_path)
-
-    runner = CliRunner()
-    result = runner.invoke(cli.main, ["delete", "cli_test_model"], input="y\n")
-
-    assert result.exit_code == 0
-    assert not (tmp_path / "cli_test_model").exists()
-
-
-def test_train_and_list_report_date_derived_features(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
+@pytest.mark.asyncio
+async def test_train_model_reports_date_derived_features(tmp_path):
     rng = np.random.RandomState(0)
     days = pd.Timestamp("2021-01-01") + pd.to_timedelta(rng.randint(0, 700, 200), unit="D")
     csv = tmp_path / "d.csv"
@@ -77,107 +55,131 @@ def test_train_and_list_report_date_derived_features(tmp_path, monkeypatch):
             "churn": np.where(days.dayofweek >= 5, "Yes", "No"),
         }
     ).to_csv(csv, index=False)
+    mcp = server.build_server(models_root=tmp_path / "models", allowed_dirs=[tmp_path])
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["train", str(csv), "--target", "churn", "--name", "m", "--quiet"]
+    result = await call_structured(
+        mcp, "train_model", {"csv_path": str(csv), "target_column": "churn", "model_name": "m"}
     )
-    assert result.exit_code == 0, result.output
-    assert "from dates" in result.output
-    assert "Features dropped: none" in result.output
 
-    listed = runner.invoke(cli.main, ["list"])
-    assert listed.exit_code == 0
+    assert result["features_dropped"] == []
+    derived = result["date_columns"]["signup"]
+    assert derived and all(name.startswith("signup__") for name in derived)
+    assert set(derived) <= set(result["features_kept"])
     meta = engine.load_metadata(tmp_path / "models" / "m")
-    assert str(len(meta["features"]["date"]["signup"]["features"])) in listed.output
+    assert meta["features"]["date"]["signup"]["features"] == derived
+    inspected = await call_structured(mcp, "inspect_model", {"model_name": "m"})
+    assert inspected["features"]["date"]["signup"]["features"] == derived
 
 
-def test_train_prints_leakage_warnings_and_still_succeeds(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
+@pytest.mark.asyncio
+async def test_train_model_reports_leakage_warnings_and_still_succeeds(tmp_path):
     rng = np.random.RandomState(0)
-    df = pd.DataFrame({"noise": rng.normal(size=200).round(1), "tox": rng.uniform(0, 10, 200).round(2)})
+    df = pd.DataFrame(
+        {"noise": rng.normal(size=200).round(1), "tox": rng.uniform(0, 10, 200).round(2)}
+    )
     df["unsafe"] = np.where(df["tox"] > 6, "yes", "no")
     csv = tmp_path / "leak.csv"
     df.to_csv(csv, index=False)
+    mcp = server.build_server(models_root=tmp_path / "models", allowed_dirs=[tmp_path])
 
-    result = CliRunner().invoke(
-        cli.main, ["train", str(csv), "--target", "unsafe", "--name", "m", "--quiet"]
+    result = await call_structured(
+        mcp, "train_model", {"csv_path": str(csv), "target_column": "unsafe", "model_name": "m"}
     )
-    assert result.exit_code == 0, result.output
-    assert "Leakage warnings:" in result.output
-    assert "Possible target leakage: 'tox'" in result.output
+
+    assert any("Possible target leakage: 'tox'" in w for w in result["warnings"])
     assert (tmp_path / "models" / "m" / engine.BUNDLE_FILENAME).exists()
 
 
-def _runner() -> CliRunner:
-    try:  # click < 8.2 mixes stderr into stdout unless told otherwise
-        return CliRunner(mix_stderr=False)
-    except TypeError:
-        return CliRunner()
-
-
-def test_version_option_prints_package_version():
-    result = CliRunner().invoke(cli.main, ["--version"])
-
-    assert result.exit_code == 0
-    assert glin.__version__ in result.output
-
-
-def test_serve_accepts_deprecated_mode_stdio_with_notice_on_stderr_only(monkeypatch):
+def _run(capsys, monkeypatch, argv):
     calls = []
     monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
+    try:
+        cli.main(argv)
+        code = 0
+    except SystemExit as exc:
+        code = exc.code
+    out, err = capsys.readouterr()
+    return code, out, err, calls
 
-    result = _runner().invoke(cli.main, ["serve", "--mode", "stdio"])
 
-    assert result.exit_code == 0
+def test_version_option_prints_package_version(capsys, monkeypatch):
+    code, out, _, _ = _run(capsys, monkeypatch, ["--version"])
+
+    assert code == 0
+    assert glin.__version__ in out
+
+
+@pytest.mark.parametrize("command", ["train", "list", "delete"])
+def test_removed_commands_do_not_exist(capsys, monkeypatch, command):
+    code, out, err, calls = _run(capsys, monkeypatch, [command])
+
+    assert code == 2
+    assert calls == []
+    assert "invalid choice" in err
+
+
+def test_serve_accepts_deprecated_mode_stdio_with_notice_on_stderr_only(capsys, monkeypatch):
+    code, out, err, calls = _run(capsys, monkeypatch, ["serve", "--mode", "stdio"])
+
+    assert code == 0
     assert calls == [{"allowed_dirs": None, "max_file_mb": 200}]
-    assert result.stdout == ""
-    assert result.stderr.count("deprecated") == 1
+    assert out == ""
+    assert err.count("deprecated") == 1
 
 
-def test_serve_without_mode_writes_nothing(monkeypatch):
-    monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: None)
+def test_serve_without_mode_writes_nothing(capsys, monkeypatch):
+    code, out, err, calls = _run(capsys, monkeypatch, ["serve"])
 
-    result = _runner().invoke(cli.main, ["serve"])
-
-    assert result.exit_code == 0
-    assert result.stdout == "" and result.stderr == ""
+    assert code == 0
+    assert len(calls) == 1
+    assert out == "" and err == ""
 
 
 @pytest.mark.parametrize("mode", ["http", "sse"])
-def test_serve_http_mode_explains_removal(monkeypatch, mode):
-    calls = []
-    monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
+def test_serve_http_mode_explains_removal(capsys, monkeypatch, mode):
+    code, out, err, calls = _run(capsys, monkeypatch, ["serve", "--mode", mode])
 
-    result = _runner().invoke(cli.main, ["serve", "--mode", mode])
-
-    assert result.exit_code == 2
+    assert code == 2
     assert calls == []
+    assert out == ""
     assert (
         "HTTP mode was removed in v0.1.4; v0.1.3 is the last release with it. "
         "glin runs over stdio only."
-    ) in result.stderr
+    ) in err
 
 
-def test_serve_passes_allow_dir_and_max_file_mb(monkeypatch, tmp_path):
-    calls = []
-    monkeypatch.setattr(cli.server, "run_stdio", lambda **kw: calls.append(kw))
-
-    result = _runner().invoke(
-        cli.main, ["serve", "--allow-dir", str(tmp_path), "--max-file-mb", "50"]
+def test_serve_passes_allow_dir_and_max_file_mb(capsys, monkeypatch, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    code, _, err, calls = _run(
+        capsys,
+        monkeypatch,
+        ["serve", "--allow-dir", str(tmp_path), "--allow-dir", str(other), "--max-file-mb", "50"],
     )
 
-    assert result.exit_code == 0, result.output
-    assert calls == [{"allowed_dirs": [tmp_path], "max_file_mb": 50}]
+    assert code == 0, err
+    assert calls == [{"allowed_dirs": [tmp_path, other], "max_file_mb": 50}]
 
 
-def test_serve_rejects_non_positive_max_file_mb():
-    result = _runner().invoke(cli.main, ["serve", "--max-file-mb", "0"])
+def test_serve_rejects_missing_allow_dir(capsys, monkeypatch, tmp_path):
+    code, _, _, calls = _run(
+        capsys, monkeypatch, ["serve", "--allow-dir", str(tmp_path / "nope")]
+    )
 
-    assert result.exit_code != 0
+    assert code == 2
+    assert calls == []
 
 
-def test_serve_rejects_unknown_mode():
-    result = CliRunner().invoke(cli.main, ["serve", "--mode", "ftp"])
+@pytest.mark.parametrize("value", ["0", "-1", "abc", "nan"])
+def test_serve_rejects_non_positive_max_file_mb(capsys, monkeypatch, value):
+    code, _, _, calls = _run(capsys, monkeypatch, ["serve", "--max-file-mb", value])
 
-    assert result.exit_code == 2
+    assert code == 2
+    assert calls == []
+
+
+def test_serve_rejects_unknown_mode(capsys, monkeypatch):
+    code, _, _, calls = _run(capsys, monkeypatch, ["serve", "--mode", "ftp"])
+
+    assert code == 2
+    assert calls == []

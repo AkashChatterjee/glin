@@ -4,9 +4,8 @@ import shutil
 import numpy as np
 import pandas as pd
 import pytest
-from click.testing import CliRunner
 
-from glin import cli, engine, server
+from glin import engine, server
 from tests.mcp_compat import call_structured
 
 VALID_NAMES = ["m", "churn_v1", "report-v1.2", "A9", "a..b", "x" * 64]
@@ -126,11 +125,12 @@ async def test_legacy_name_with_space_still_loads(roots):
     assert meta["model_name"] == "old model"
 
 
-def test_cli_delete_removes_legacy_name_with_space(roots, monkeypatch):
+@pytest.mark.asyncio
+async def test_delete_model_removes_legacy_name_with_space(roots):
     legacy = _legacy_model(roots)
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", roots)
-    result = CliRunner().invoke(cli.main, ["delete", "old model", "--yes"])
-    assert result.exit_code == 0, result.output
+    mcp = server.build_server(models_root=roots)
+    result = await call_structured(mcp, "delete_model", {"model_name": "old model"})
+    assert result["deleted"] is True
     assert not legacy.exists()
     assert (roots / "good").exists()
 
@@ -146,29 +146,46 @@ async def test_tools_accept_valid_name(roots):
     assert pred["predicted_class"] == "Yes"
 
 
-def test_cli_delete_rejects_bad_names(roots, tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", roots)
-    runner = CliRunner()
+@pytest.mark.asyncio
+async def test_delete_model_rejects_bad_names(roots, tmp_path):
+    mcp = server.build_server(models_root=roots)
     for name in _path_names(tmp_path):
-        result = runner.invoke(cli.main, ["delete", name, "--yes"])
-        assert result.exit_code != 0
-        assert "single folder name" in result.output
+        with pytest.raises(server.ToolError, match="single folder name"):
+            await mcp.call_tool("delete_model", {"model_name": name})
     for name in STRICT_ONLY_BAD:
-        result = runner.invoke(cli.main, ["delete", name, "--yes"])
-        assert result.exit_code != 0
-        assert "not found" in result.output
+        with pytest.raises(server.ToolError, match="not found"):
+            await mcp.call_tool("delete_model", {"model_name": name})
     assert (tmp_path / "escape" / engine.METADATA_FILENAME).exists()
     assert (roots / "good").exists()
 
 
-def test_cli_train_rejects_bad_name_before_training(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
-    monkeypatch.setattr(cli.engine, "train_model", lambda *a, **k: pytest.fail("trained"))
+@pytest.mark.asyncio
+async def test_delete_model_rejects_symlink_outside_root(roots, tmp_path):
+    (roots / "linked").symlink_to(tmp_path / "escape", target_is_directory=True)
+    mcp = server.build_server(models_root=roots)
+    with pytest.raises(server.ToolError, match="invalid model name"):
+        await mcp.call_tool("delete_model", {"model_name": "linked"})
+    assert (tmp_path / "escape" / engine.METADATA_FILENAME).exists()
+
+
+@pytest.mark.asyncio
+async def test_train_model_rejects_bad_name_before_training(tmp_path, monkeypatch):
+    monkeypatch.setattr(server.engine, "train_model", lambda *a, **k: pytest.fail("trained"))
     csv_path = tmp_path / "data.csv"
     _df().to_csv(csv_path, index=False)
-    result = CliRunner().invoke(
-        cli.main, ["train", str(csv_path), "--target", "churn", "--name", "../escape"]
-    )
-    assert result.exit_code != 0
-    assert "1-64 characters" in result.output
+    mcp = server.build_server(models_root=tmp_path / "models", allowed_dirs=[tmp_path])
+    with pytest.raises(server.ToolError, match="1-64 characters"):
+        await mcp.call_tool(
+            "train_model",
+            {"csv_path": str(csv_path), "target_column": "churn", "model_name": "../escape"},
+        )
     assert not (tmp_path / "escape").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_model_removes_only_the_link_for_a_symlink_inside_root(roots):
+    (roots / "alias").symlink_to(roots / "good", target_is_directory=True)
+    mcp = server.build_server(models_root=roots)
+    await call_structured(mcp, "delete_model", {"model_name": "alias"})
+    assert not (roots / "alias").exists()
+    assert (roots / "good" / engine.METADATA_FILENAME).exists()

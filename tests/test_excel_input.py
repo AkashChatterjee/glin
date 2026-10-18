@@ -1,9 +1,8 @@
 import sys
 
 import pytest
-from click.testing import CliRunner
 
-from glin import cli, engine, server
+from glin import engine, server
 from tests.excel_helpers import churn_rows, make_workbook, messy_churn_sheet
 from tests.mcp_compat import call_structured, input_schema
 
@@ -154,48 +153,36 @@ async def test_train_model_schema_documents_excel_options(tmp_path):
     assert "csv_path" in props
 
 
-def test_cli_train_reads_messy_excel(tmp_path, monkeypatch, messy_xlsx):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
-    result = CliRunner().invoke(
-        cli.main, ["train", str(messy_xlsx), "--target", "churn", "--name", "xl", "--quiet"]
-    )
-    assert result.exit_code == 0, result.output
-    assert "sheet 'Data', header row(s): 4" in result.output
-    assert "200 rows, 3 columns" in result.output
+@pytest.mark.asyncio
+async def test_train_model_saves_messy_excel_and_reports_footnote(tmp_path, messy_xlsx):
+    result = await _train(tmp_path / "models", [tmp_path], messy_xlsx)
+    assert result["rows_read"] == 200
+    assert len(result["features_kept"]) + len(result["features_dropped"]) == 2
+    assert any("dropped 1 footnote row(s)" in w for w in result["warnings"])
     assert (tmp_path / "models" / "xl" / engine.METADATA_FILENAME).exists()
 
 
-def test_cli_train_sheet_and_header_rows_options(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_train_model_sheet_choice_names_the_sheet_argument(tmp_path):
     rows = [["Customer", None, "churn"], ["age", "plan", None], *churn_rows()]
     path = make_workbook(tmp_path / "m.xlsx", {"A": ([["x"]], []), "B": (rows, [])})
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
+    models = tmp_path / "models"
 
-    args = ["train", str(path), "--target", "churn", "--name", "xl", "--quiet"]
-    missing = CliRunner().invoke(cli.main, args)
-    assert missing.exit_code != 0
-    assert "2 sheets" in missing.output and "--sheet" in missing.output
+    with pytest.raises(ToolError, match="2 sheets; choose one with sheet") as exc:
+        await _train(models, [tmp_path], path)
+    assert "--sheet" not in str(exc.value)
 
-    ok = CliRunner().invoke(cli.main, [*args, "--sheet", "B", "--header-rows", "1-2"])
-    assert ok.exit_code == 0, ok.output
-    assert "header row(s): 1, 2" in ok.output
+    result = await _train(models, [tmp_path], path, sheet="B", header_rows="1-2")
+    assert result["header_rows"] == [1, 2]
 
 
-def test_cli_train_ambiguous_header_is_a_clean_error(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_train_model_ambiguous_header_is_a_clean_error(tmp_path):
     rows = [["Customer", None, "churn"], ["age", "plan", None], *churn_rows()]
     path = make_workbook(tmp_path / "m.xlsx", {"B": (rows, [])})
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
-    result = CliRunner().invoke(
-        cli.main, ["train", str(path), "--target", "churn", "--name", "xl", "--quiet"]
-    )
-    assert result.exit_code != 0
-    assert "ambiguous" in result.output and "--header-rows" in result.output
-    assert "Traceback" not in result.output
-
-
-def test_cli_train_prints_footnote_warning(tmp_path, monkeypatch, messy_xlsx):
-    monkeypatch.setattr(cli, "DEFAULT_MODELS_ROOT", tmp_path / "models")
-    result = CliRunner().invoke(
-        cli.main, ["train", str(messy_xlsx), "--target", "churn", "--name", "xl", "--quiet"]
-    )
-    assert result.exit_code == 0, result.output
-    assert "Warning: dropped 1 footnote row(s)" in result.output
+    with pytest.raises(ToolError, match="ambiguous") as exc:
+        await _train(tmp_path / "models", [tmp_path], path)
+    message = str(exc.value)
+    assert "header_rows" in message and "--header-rows" not in message
+    assert "Traceback" not in message
+    assert not (tmp_path / "models" / "xl").exists()
