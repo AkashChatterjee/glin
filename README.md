@@ -100,9 +100,11 @@ To run glin from a copy that is already installed (`uv tool install glin-ml`, `p
 
 ### MCP Registry
 
-The release workflow publishes glin to the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.AkashChatterjee/glin` (see [Publishing to the MCP Registry](#publishing-to-the-mcp-registry)). The metadata is in [`server.json`](https://github.com/AkashChatterjee/glin/blob/main/server.json). The registry points to the `glin-ml` package on PyPI. The package also installs a `glin-ml` command, which is the same as `glin`, so `uvx glin-ml serve` works.
+glin is in the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.AkashChatterjee/glin`. The registry is a catalog of metadata. It is not an installer. MCP marketplaces and some clients read it and show glin in their server lists. For example, VS Code installs servers from the [GitHub MCP Registry](https://github.com/mcp). Thus, you can install glin from a registry only if your client has a registry search. If your client has none, use the config in [Other MCP clients](#other-mcp-clients).
 
-The registry entry installs `glin-ml` without the `excel` extra, because the registry format has no field for extras. To read Excel files, set your MCP client to run `uvx --from 'glin-ml[excel]' glin serve` (command `uvx`, arguments `--from`, `glin-ml[excel]`, `glin`, `serve`).
+The registry entry starts `uvx glin-ml serve`. It does not include the `excel` extra, because the registry format has no field for extras. To read Excel files, use the config in [Other MCP clients](#other-mcp-clients).
+
+The release workflow updates the entry for each release. See [Publishing to the MCP Registry](#publishing-to-the-mcp-registry).
 
 ### Install for development
 
