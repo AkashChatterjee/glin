@@ -64,7 +64,7 @@ The server code is the PyPI package `glin-ml`. The name `glin` belongs to an unr
 
 ### Claude Code
 
-The plugin adds the glin MCP server and a skill. The skill tells the agent when and how to build, tune, predict with and explain a model. The plugin runs `uvx --from 'glin-ml[excel]>=0.1.4' glin serve`. This command includes Excel support, and it does not start a version older than 0.1.4.
+The plugin adds the glin MCP server and a skill. The skill tells the agent when and how to build, tune, predict with and explain a model. The plugin runs `uvx --from 'glin-ml[excel]>=0.1.5' glin serve`. This command includes Excel support, and it does not start a version older than 0.1.5.
 
 In Claude Code, run:
 
@@ -100,7 +100,7 @@ To run glin from a copy that is already installed (`uv tool install glin-ml`, `p
 
 ### MCP Registry
 
-After each release, the maintainer publishes glin to the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.AkashChatterjee/glin`. This is a manual step (see [Publishing to the MCP Registry](#publishing-to-the-mcp-registry)). The metadata is in [`server.json`](https://github.com/AkashChatterjee/glin/blob/main/server.json). The registry points to the `glin-ml` package on PyPI. The package also installs a `glin-ml` command, which is the same as `glin`, so `uvx glin-ml serve` works.
+The release workflow publishes glin to the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.AkashChatterjee/glin` (see [Publishing to the MCP Registry](#publishing-to-the-mcp-registry)). The metadata is in [`server.json`](https://github.com/AkashChatterjee/glin/blob/main/server.json). The registry points to the `glin-ml` package on PyPI. The package also installs a `glin-ml` command, which is the same as `glin`, so `uvx glin-ml serve` works.
 
 The registry entry installs `glin-ml` without the `excel` extra, because the registry format has no field for extras. To read Excel files, set your MCP client to run `uvx --from 'glin-ml[excel]' glin serve` (command `uvx`, arguments `--from`, `glin-ml[excel]`, `glin`, `serve`).
 

@@ -2,7 +2,7 @@
   "mcpServers": {
     "glin": {
       "command": "uvx",
-      "args": ["--from", "glin-ml[excel]>=0.1.4", "glin", "serve"]
+      "args": ["--from", "glin-ml[excel]>=0.1.5", "glin", "serve"]
     }
   }
 }
