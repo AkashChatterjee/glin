@@ -31,7 +31,7 @@ glin handles classification. It cannot do regression. A target must have at leas
    - `evaluation.log_loss` must be clearly lower than `evaluation.baseline_log_loss`. If it is not, the features carry little signal.
    - A holdout `roc_auc` above 0.95 on real data usually means leakage. Check the columns again.
 
-Excel files need `glin-ml[excel]`. With uvx, the server command is `uvx --from 'glin-ml[excel]' glin serve`. Pass `sheet` for a workbook with several sheets. Pass `header_rows` (for example `"3-4"`) if the header detection is not clear.
+Excel files need `glin-ml[excel]`. With uvx, the server command is `uvx --from 'glin-ml[excel]>=0.1.5' glin serve`. Pass `sheet` for a workbook with several sheets. Pass `header_rows` (for example `"3-4"`) if the header detection is not clear.
 
 Numeric columns can have codes for missing values. The default codes are `SUPP`, `NE`, `NP`, `z`, `*` and `..`. If a warning names other codes, confirm with the user. Then pass them in `suppression_codes`. A warning can also say that codes keep a column from being numeric. Do the same for that warning.
 
